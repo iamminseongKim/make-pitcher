@@ -193,6 +193,11 @@ export interface GameState {
   ourScore: number[]
   inningHits: number
   inningWalks: number
+  /** Pitches and strikeouts in the current half inning (immaculate inning = 9 pitches, 3 K). */
+  inningPitches: number
+  inningStrikeouts: number
+  /** In-game feats, e.g. "무결점 이닝 (3회)". */
+  feats: string[]
   pitches: number
   strikeouts: number
   hits: number
@@ -225,7 +230,7 @@ export function newGame(prev?: GameState, tier = 0): GameState {
     id: (prev?.id ?? 0) + 1, tier, pitchLog: [], totalOuts: 0, atBats: 0, opponent, batterIndex: 0,
     lineup: makeLineup(TIERS[tier].strength).map((b, i) => ({ ...b, name: tier < 3 ? b.name : US_NAMES[i] })),
     inning: 1, outs: 0, balls: 0, strikes: 0, bases: [false, false, false], runsAgainst: 0, runsFor: 0,
-    lineScore: [0], ourScore: [], inningHits: 0, inningWalks: 0, pitches: 0, strikeouts: 0, hits: 0, walks: 0, hbp: 0, homeRuns: 0,
+    lineScore: [0], ourScore: [], inningHits: 0, inningWalks: 0, inningPitches: 0, inningStrikeouts: 0, feats: [], pitches: 0, strikeouts: 0, hits: 0, walks: 0, hbp: 0, homeRuns: 0,
     abLog: [], memory: {}, confidence: {}, saveOpp: false, refusals: 0, pulled: false, bullpenRuns: 0, exitLead: 0, over: false,
   }
 }
@@ -619,7 +624,9 @@ export function simulateOurHalf() {
 
 /* ───────────────────────── Applying a pitch to the game ───────────────────────── */
 
-export interface PitchEvents { paEnded: boolean; strikeout: boolean; out: boolean; hit: boolean; walk: boolean; runs: number; inningOver: boolean; reward: number; mastery: number }
+export interface PitchEvents { paEnded: boolean; strikeout: boolean; out: boolean; hit: boolean; walk: boolean; runs: number; inningOver: boolean; reward: number; mastery: number; immaculate?: boolean }
+/** Special TP (before the league multiplier). Game feats are paid when the game is closed out. */
+export const SPECIAL_TP = { immaculate: 80, completeGame: 100, shutout: 200, noHitter: 350, perfectGame: 600 } as const
 export interface Call { text: string; tone: 'k' | 'hr' | 'hit' | 'out' | 'ball' | 'strike' | 'foul' }
 
 const CALLS: Record<PitchOutcome, Call> = {
@@ -640,7 +647,7 @@ const CALLS: Record<PitchOutcome, Call> = {
 export function applyOutcome(g: GameState, f: PitchFlight, r: PitchResult): { game: GameState; events: PitchEvents; call: Call } {
   const o = r.outcome
   const batter = g.lineup[g.batterIndex]
-  const next: GameState = { ...g, bases: [...g.bases] as GameState['bases'], lineScore: [...g.lineScore], pitches: g.pitches + 1 }
+  const next: GameState = { ...g, bases: [...g.bases] as GameState['bases'], lineScore: [...g.lineScore], pitches: g.pitches + 1, inningPitches: (g.inningPitches ?? 0) + 1 }
   const ev: PitchEvents = { paEnded: false, strikeout: false, out: false, hit: false, walk: false, runs: 0, inningOver: false, reward: 0, mastery: 4 }
   let call = { ...CALLS[o] }
   const entry: PitchLog = { pitch: f.pitch.id, speed: f.speed, x: f.landing.x, y: f.landing.y, px: r.barrel.x, py: r.barrel.y, call: CALLS[o].text, tag: r.tags[0] ?? '', ...(f.meatball ? { meatball: true } : {}) }
@@ -656,7 +663,7 @@ export function applyOutcome(g: GameState, f: PitchFlight, r: PitchResult): { ga
   } else if (o === 'CALLED_STRIKE' || o === 'SWINGING_STRIKE') {
     next.strikes++; ev.reward = o === 'SWINGING_STRIKE' ? 3 : 2; ev.mastery = o === 'SWINGING_STRIKE' ? 10 : 7
     if (next.strikes >= 3) {
-      ev.strikeout = true; ev.out = true; next.outs++; next.strikeouts++; ev.reward += 20; ev.mastery += 15
+      ev.strikeout = true; ev.out = true; next.outs++; next.strikeouts++; next.inningStrikeouts = (g.inningStrikeouts ?? 0) + 1; ev.reward += 20; ev.mastery += 15
       call = { text: o === 'CALLED_STRIKE' ? '루킹 삼진' : '헛스윙 삼진', tone: 'k' }
     }
   } else if (o === 'FOUL') {
@@ -686,11 +693,16 @@ export function applyOutcome(g: GameState, f: PitchFlight, r: PitchResult): { ga
   if (next.outs >= 3) {
     ev.inningOver = true; ev.reward += 30
     if (next.inningHits === 0 && next.inningWalks === 0) ev.reward += 25
+    // Immaculate inning: three strikeouts on nine pitches.
+    if (next.inningStrikeouts === 3 && next.inningPitches === 9) {
+      ev.immaculate = true; ev.reward += SPECIAL_TP.immaculate
+      next.feats = [...(g.feats ?? []), `무결점 이닝 (${g.inning}회)`]
+    }
   }
   return { game: next, events: ev, call }
 }
 
-export interface InningSummary { inning: number; allowed: number; ours: number; clean: boolean; finished: 'WIN' | 'LOSS' | 'TIE' | null }
+export interface InningSummary { inning: number; allowed: number; ours: number; clean: boolean; finished: 'WIN' | 'LOSS' | 'TIE' | null; immaculate?: boolean }
 /** Ends the top half, simulates our at-bats, and decides the game. */
 export function closeInning(g: GameState): { game: GameState; summary: InningSummary } {
   const allowed = g.lineScore[g.lineScore.length - 1]
@@ -705,10 +717,10 @@ export function closeInning(g: GameState): { game: GameState; summary: InningSum
   const lead = g.runsFor + ours - g.runsAgainst
   const next: GameState = {
     ...g, runsFor: g.runsFor + ours, ourScore: [...g.ourScore, ours], outs: 0, balls: 0, strikes: 0, bases: [false, false, false],
-    inningHits: 0, inningWalks: 0, abLog: [], over: finished !== null,
+    inningHits: 0, inningWalks: 0, inningPitches: 0, inningStrikeouts: 0, abLog: [], over: finished !== null,
     inning: finished ? g.inning : g.inning + 1, lineScore: finished ? g.lineScore : [...g.lineScore, 0],
     // Save situation: taking the mound for the 9th protecting a 1–3 run lead.
     saveOpp: g.inning === 8 && !finished ? lead >= 1 && lead <= 3 : Boolean(g.saveOpp),
   }
-  return { game: next, summary: { inning: g.inning, allowed, ours, clean, finished } }
+  return { game: next, summary: { inning: g.inning, allowed, ours, clean, finished, immaculate: g.inningStrikeouts === 3 && g.inningPitches === 9 } }
 }

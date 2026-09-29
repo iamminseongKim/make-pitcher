@@ -1,5 +1,5 @@
 import { sfx, disposeAudio } from './audio'
-import { TIERS, seasonAwards, loadUnlockedTier, saveUnlockedTier, aggregate, callUpSchedule, promotionStatus, seasonDone as isSeasonDone, formatIP, newSeason, recordGame, seasonRates, gameTeam, serviceTime, tierOf, type Season } from './season'
+import { TIERS, FEAT_TP, gameFeat, seasonAwards, loadUnlockedTier, saveUnlockedTier, aggregate, callUpSchedule, promotionStatus, seasonDone as isSeasonDone, formatIP, newSeason, recordGame, seasonRates, gameTeam, serviceTime, tierOf, type Season } from './season'
 import { PitchChart } from './PitchChart'
 import { Creator } from './Creator'
 import { CareerHub, PromotionCard } from './CareerHub'
@@ -9,7 +9,7 @@ import { AGE, RETIRE_LABEL, START_AGE, ageEffects, ageStage, buildRetired, legac
 import { useEffect, useRef, useState, type CSSProperties, type PointerEvent } from 'react'
 import { Activity, ArrowLeft, ArrowRight, Check, CircleHelp, Crosshair, Eye, Flame, History, LockKeyhole, RotateCcw, Settings2, Sparkles, Trophy, Volume2, VolumeX, Zap } from 'lucide-react'
 import {
-  DECISION_LABEL, MEATBALL_MISS, MOOD_LABEL, STAMINA, PITCHES, SAVE_KEY, SWEET_CENTER, WEAK_LABEL, ZONE_LABEL,
+  DECISION_LABEL, MEATBALL_MISS, MOOD_LABEL, SPECIAL_TP, STAMINA, PITCHES, SAVE_KEY, SWEET_CENTER, WEAK_LABEL, ZONE_LABEL,
   applyOutcome, batterAdaptation, bullpenFinish, canRefuseHook, fatigueAfter, needsHook, pitcherDecision, staminaCost, batterMindset, batterSide, breakScale, clamp, closeInning, createFlight, createPreviewFlight, defaultProfile,
   loadSave, masteryLevel, moodOf, newGame, pitchById, pitcherLevel, resolvePitch, scoutingReport, statSpeed, sweetSpot, tunnelRead, upgradeCost, zoneHeat,
   type Call, type GameState, type InningSummary, type PitchFlight,
@@ -36,6 +36,9 @@ function Bases({ bases }: { bases: [boolean, boolean, boolean] }) {
     <i className={bases[0] ? 'on' : ''} style={{ left: 23, top: 14 }} />
   </div>
 }
+
+/** 1,234 → 1,234 · 12,627 → 12.6k · 1,250,000 → 1.3M */
+const compactTP = (n: number) => n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e4 ? `${(n / 1e3).toFixed(1)}k` : n.toLocaleString()
 
 function PaChips({ pitches }: { pitches: PitchLog[] }) {
   return <span className="pa-chips">{pitches.map((p, i) => { const d = pitchById(p.pitch); return <i key={i} style={{ '--pitch-color': d.color } as CSSProperties} title={`${d.short} ${p.speed.toFixed(0)} · ${p.call}`}>{d.short.slice(0, 1)}{p.meatball && <b>!</b>}</i> })}</span>
@@ -144,7 +147,7 @@ function App() {
     if (!r.swing) animRef.current = { ...animRef.current, kind: o === 'HIT_BY_PITCH' ? 'hbp' : 'take', at: performance.now() }
 
     const tag = r.tags.filter(t => !call.text.includes(t)).slice(0, 2).join(' · ')
-    resultRef.current = { text: ev.strikeout && o === 'SWINGING_STRIKE' ? 'STRIKE THREE!' : o === 'SWINGING_STRIKE' ? (r.tags.includes('유인구') ? 'CHASE!' : 'SWING & MISS') : r.tags.includes('코너 꽉 찬 공') ? 'PAINTED THE CORNER' : call.text.split(' · ')[0], tone: call.tone, at: performance.now() }
+    resultRef.current = { text: ev.immaculate ? 'IMMACULATE INNING!' : ev.strikeout && o === 'SWINGING_STRIKE' ? 'STRIKE THREE!' : o === 'SWINGING_STRIKE' ? (r.tags.includes('유인구') ? 'CHASE!' : 'SWING & MISS') : r.tags.includes('코너 꽉 찬 공') ? 'PAINTED THE CORNER' : call.text.split(' · ')[0], tone: call.tone, at: performance.now() }
     setCallout({ main: call.text, sub: [tag, `${f.pitch.short} ${f.speed.toFixed(0)}km`].filter(Boolean).join(' · '), tone: call.tone })
     playOutcome(call, o, f)
     if (reward) setTpPop({ n: reward, key: performance.now() })
@@ -274,7 +277,8 @@ function App() {
     if (!summary) return
     if (summary.finished) {
       const win = summary.finished === 'WIN', loss = summary.finished === 'LOSS'
-      const bonus = Math.round((win ? 150 : loss ? 40 : 70) * league.tp * aging.tpMul)
+      const feat = gameFeat(game)
+      const bonus = Math.round(((win ? 150 : loss ? 40 : 70) + (feat ? FEAT_TP[feat] : 0)) * league.tp * aging.tpMul)
       const fatigue = fatigueAfter(game, profile.stamina)
       setProfile(p => ({ ...p, trainingPoints: p.trainingPoints + bonus, fatigue, stamina: 100 - fatigue }))
       let nextSeason = seasonView
@@ -360,7 +364,7 @@ function App() {
         <header className="app-header">
           <Logo sub={`${profile.age}세 · S${season.number} · G${Math.min(season.scheduled, season.games + 1)}/${season.scheduled} · ${careerLine.wins}승 ${careerLine.losses}패`} />
           <div className="header-actions">
-            <div className="tp-pill" aria-label={`훈련 포인트 ${profile.trainingPoints}`}><Zap size={13} fill="currentColor" /><strong>{profile.trainingPoints.toLocaleString()}</strong>{tpPop && <em key={tpPop.key} className="tp-pop">+{tpPop.n}</em>}</div>
+            <div className="tp-pill" aria-label={`훈련 포인트 ${profile.trainingPoints}`}><Zap size={13} fill="currentColor" /><strong>{compactTP(profile.trainingPoints)}</strong>{tpPop && <em key={tpPop.key} className="tp-pop">+{tpPop.n}</em>}</div>
             <button className="icon-button" onClick={() => openPanel('career')} aria-label="커리어 기록실"><Trophy size={17} /></button>
             <button className="icon-button train" onClick={() => { setTrainingPitch(selected); openPanel('training') }} aria-label="훈련실"><Activity size={17} /></button>
             <button className="icon-button" onClick={() => setSoundOn(!soundOn)} aria-label={soundOn ? '소리 끄기' : '소리 켜기'}>{soundOn ? <Volume2 size={17} /> : <VolumeX size={17} />}</button>
@@ -464,11 +468,13 @@ function App() {
 
     {summary && panel === 'none' && <div className="overlay"><section className="sheet inning-sheet" role="dialog" aria-modal="true" aria-label={seasonDone ? 'Season Summary' : summary.finished ? 'Game Summary' : 'Inning Summary'}>
       <span className="eyebrow">{summary.finished ? `FINAL · ${league.short} · ${DECISION_LABEL[pitcherDecision(game)]}` : `${summary.inning}회 종료`}</span>
-      <h1>{summary.finished === 'WIN' ? (game.saveOpp ? '세이브 상황 사수!' : '승리!') : summary.finished === 'LOSS' ? '패전…' : summary.finished === 'TIE' ? '무승부' : summary.allowed === 0 ? (summary.clean ? '삼자범퇴' : '무실점') : `${summary.allowed}실점`}</h1>
+      <h1>{summary.finished && gameFeat(game) && gameFeat(game) !== '완투' ? `${gameFeat(game)}!` : summary.finished === 'WIN' ? (game.saveOpp ? '세이브 상황 사수!' : '승리!') : summary.finished === 'LOSS' ? '패전…' : summary.finished === 'TIE' ? '무승부' : summary.allowed === 0 ? (summary.clean ? '삼자범퇴' : '무실점') : `${summary.allowed}실점`}</h1>
       <div className="table-scroll"><table className="linescore"><thead><tr><th />{game.lineScore.slice(0, summary.inning).map((_, i) => <th key={i}>{i + 1}</th>)}<th>R</th></tr></thead>
         <tbody><tr><td>{team.short}</td>{game.lineScore.slice(0, summary.inning).map((n, i) => <td key={i}>{n}</td>)}<td><b>{game.runsAgainst}</b></td></tr>
           <tr><td>ACE</td>{game.lineScore.slice(0, summary.inning).map((_, i) => <td key={i}>{summary.finished === 'WIN' && summary.ours === 0 && i === summary.inning - 1 && summary.inning >= 9 ? 'X' : game.ourScore[i] ?? ''}</td>)}<td><b>{game.runsFor}</b></td></tr></tbody></table></div>
       {!summary.finished && <p className="inning-note">{summary.ours ? `우리 타선 ${summary.ours}점 지원!` : '우리 타선 침묵.'}{summary.clean ? '  클린 이닝 보너스 +TP' : ''}</p>}
+      {!summary.finished && summary.immaculate && <p className="special-tp">무결점 이닝 · 9구 3삼진 <b>+{Math.round(SPECIAL_TP.immaculate * league.tp * aging.tpMul)} TP</b></p>}
+      {summary.finished && (gameFeat(game) || (game.feats ?? []).length > 0) && <p className="special-tp">{[...(game.feats ?? []), gameFeat(game)].filter(Boolean).join(' · ')}{gameFeat(game) && <b> +{Math.round(FEAT_TP[gameFeat(game)!] * league.tp * aging.tpMul)} TP</b>}</p>}
       {summary.finished && game.pulled && <p className="inning-note">{formatIP(game.totalOuts)}이닝 후 강판 · 불펜 {game.bullpenRuns}실점 · 교체 시점 {game.exitLead > 0 ? `${game.exitLead}점 리드` : game.exitLead < 0 ? `${-game.exitLead}점 열세` : '동점'}</p>}
       {summary.finished && <p className="fatigue-note">다음 등판 시작 체력 <b>{100 - fatigueAfter(game, profile.stamina)}</b>{fatigueAfter(game, profile.stamina) > 0 ? ' · 혹사 여파' : ' · 정상 휴식'}</p>}
       {summary.finished && <p className="inning-note">{formatIP(game.totalOuts)} IP · {game.strikeouts}K · {game.hits}피안타 · {game.homeRuns ?? 0}HR · {game.walks}볼넷 · {game.pitches}구</p>}

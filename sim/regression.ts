@@ -277,9 +277,21 @@ assert(hitsOver(6000, () => f, { balls: 3, strikes: 1, history: Array(4).fill(g.
   assert(seasonAwards({ ...ace, tier: 1 }).includes('퓨처스리그 우수 투수상'))
   assert.deepEqual(seasonAwards({ ...ace, runs: 150 }), ['MLB 탈삼진왕'])
   const cg = { ...newGame(), over: true, totalOuts: 27, runsFor: 1, runsAgainst: 0, hits: 0, walks: 0, hbp: 0 }
-  assert.equal(gameFeat(cg), '퍼펙트게임'); assert.equal(gameFeat({ ...cg, walks: 2 }), '노히터'); assert.equal(gameFeat({ ...cg, hits: 3 }), '완봉승')
+  assert.equal(gameFeat(cg), '퍼펙트게임'); assert.equal(gameFeat({ ...cg, walks: 2 }), '노히터'); assert.equal(gameFeat({ ...cg, hits: 3 }), '완봉승'); assert.equal(gameFeat({ ...cg, hits: 5, runsAgainst: 2 }), '완투')
   assert.equal(gameFeat({ ...cg, pulled: true }), null)
   assert.deepEqual(recordGame(newSeason(), cg).feats, ['퍼펙트게임 (G1)'])
+  assert.deepEqual(recordGame(newSeason(), { ...cg, hits: 4, runsAgainst: 1, feats: ['무결점 이닝 (3회)'] }).feats, ['무결점 이닝 (G1 · 3회)', '완투 (G1)'])
+  // Immaculate inning: 9 pitches, 3 strikeouts
+  {
+    let im = { ...newGame(), outs: 0 }, last: ReturnType<typeof applyOutcome> | null = null
+    const ff = createPreviewFlight(PITCHES[0], p.arsenal.FOUR_SEAM, p, { x: 0, y: 0 })
+    for (let i = 0; i < 9; i++) { last = applyOutcome(im, ff, { outcome: 'SWINGING_STRIKE', swing: true, perceived: ff.landing, tunnel: 0, adaptation: 0, tags: [], barrel: ff.landing, sprayAngle: 0 }); im = last.game }
+    assert(last!.events.immaculate && last!.events.inningOver); assert.deepEqual(im.feats, ['무결점 이닝 (1회)'])
+    assert(closeInning(im).summary.immaculate)
+    let notIm = { ...newGame() }
+    for (const o of ['BALL', 'SWINGING_STRIKE', 'SWINGING_STRIKE', 'SWINGING_STRIKE', 'SWINGING_STRIKE', 'SWINGING_STRIKE', 'SWINGING_STRIKE', 'SWINGING_STRIKE', 'SWINGING_STRIKE', 'SWINGING_STRIKE'] as const) { last = applyOutcome(notIm, ff, { outcome: o, swing: true, perceived: ff.landing, tunnel: 0, adaptation: 0, tags: [], barrel: ff.landing, sprayAngle: 0 }); notIm = last.game }
+    assert(!last!.events.immaculate && last!.events.inningOver, 'a ball spoils it')
+  }
   // Hall of fame + legacy archive
   const career = Array.from({ length: 8 }, (_, i) => ({ ...ace, number: i + 1, year: i + 1, awards: i < 2 ? ['사이영상'] : [] }))
   const hof = hallOfFame(career)

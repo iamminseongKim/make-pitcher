@@ -69,13 +69,15 @@ export function gameFeat(g: GameState): string | null {
   if (g.hits === 0 && g.walks === 0 && (g.hbp ?? 0) === 0 && g.runsAgainst === 0) return '퍼펙트게임'
   if (g.hits === 0) return '노히터'
   if (g.runsAgainst === 0) return '완봉승'
-  return null
+  return '완투'
 }
+/** Special TP for closing out a game (before league/age multipliers). */
+export const FEAT_TP: Record<string, number> = { 완투: 100, 완봉승: 200, 노히터: 350, 퍼펙트게임: 600 }
 export function recordGame(s: Season, g: GameState): Season {
   if (!g.over || g.id === s.lastGameId) return s
   const feat = gameFeat(g)
   return {
-    ...s, feats: feat ? [...(s.feats ?? []), `${feat} (G${s.games + 1})`] : s.feats, games: s.games + 1, wins: s.wins + Number(gameWon(g)), losses: s.losses + Number(pitcherDecision(g) === 'L'), saves: s.saves + Number(gameSaved(g)),
+    ...s, feats: [...(s.feats ?? []), ...(g.feats ?? []).map(f => f.replace('(', `(G${s.games + 1} · `)), ...(feat ? [`${feat} (G${s.games + 1})`] : [])], games: s.games + 1, wins: s.wins + Number(gameWon(g)), losses: s.losses + Number(pitcherDecision(g) === 'L'), saves: s.saves + Number(gameSaved(g)),
     outs: s.outs + g.totalOuts, runs: s.runs + pitcherRuns(g), hits: s.hits + g.hits, walks: s.walks + g.walks, hbp: s.hbp + (g.hbp ?? 0),
     homeRuns: s.homeRuns + (g.homeRuns ?? 0), strikeouts: s.strikeouts + g.strikeouts, atBats: s.atBats + g.atBats, pitches: s.pitches + g.pitches, lastGameId: g.id,
   }
