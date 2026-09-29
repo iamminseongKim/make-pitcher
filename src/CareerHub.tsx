@@ -1,9 +1,25 @@
 import { useState } from 'react'
 import { ArrowLeft, Pencil } from 'lucide-react'
 import { ARM_SLOTS, extensionOf, pitcherLevel, releaseHeightOf, type PitcherProfile } from './game'
-import { TIERS, aggregate, formatIP, seasonRates, serviceTime, tierOf, type Season } from './season'
+import { PROMOTION, TIERS, aggregate, formatIP, promotionStatus, seasonRates, serviceTime, tierOf, type Criterion, type Season } from './season'
 
 type View = 'career' | number
+
+function Checklist({ items }: { items: Criterion[] }) {
+  return <ul className="criteria">{items.map(c => <li key={c.label} className={c.met ? 'met' : ''}><b>{c.met ? '✓' : '·'}</b><span>{c.label}</span><strong>{c.value}</strong><small>{c.goal}</small></li>)}</ul>
+}
+/** Promotion rules for the season in progress (season end + mid-season call-up + demotion line). */
+export function PromotionCard({ season, done }: { season: Season; done: boolean }) {
+  const p = promotionStatus(season)
+  const tier = tierOf(season.tier), next = TIERS[season.tier + 1]
+  if (p.top) return <div className="promo-card"><header><b>MLB</b><span>최고 무대입니다. ERA {(p.threshold + PROMOTION.demoteMargin).toFixed(2)} 이상({PROMOTION.demoteMinOuts / 3}이닝+)이면 시즌 후 AAA 강등.</span></header></div>
+  return <div className={`promo-card ${p.canPromote || p.callUp ? 'ready' : ''} ${p.demote ? 'danger' : ''}`}>
+    <header><b>{tier.short} → {next.short}</b><span>{done ? (p.demote ? '강등 기준에 걸렸습니다' : p.canPromote ? '승격 조건 달성!' : '승격 조건 미달') : p.callUp ? '콜업 조건 달성!' : '시즌 종료 시 승격 조건'}</span></header>
+    <Checklist items={p.season} />
+    {!done && <><p className="promo-sub">시즌 중 콜업 ({PROMOTION.callUpGames}경기 이상 압도적 성적)</p><Checklist items={p.callUpCriteria} /></>}
+    {season.tier > 0 && <p className="promo-sub warn">강등: ERA {(p.threshold + PROMOTION.demoteMargin).toFixed(2)} 이상 ({PROMOTION.demoteMinOuts / 3}이닝 이상) 시 시즌 후 한 단계 하락</p>}
+  </div>
+}
 
 function StatGrid({ s }: { s: Season }) {
   const r = seasonRates(s)
@@ -44,6 +60,8 @@ export function CareerHub({ profile, history, current, onClose, onEdit }: { prof
         <button role="tab" aria-selected={view === 'career'} className={view === 'career' ? 'active' : ''} onClick={() => setView('career')}>통산</button>
         {seasons.map(s => <button role="tab" key={s.number} aria-selected={view === s.number} className={view === s.number ? 'active' : ''} onClick={() => setView(s.number)}>S{s.number}<small>{tierOf(s.tier).short}</small></button>)}
       </div>
+      <h3 className="stat-heading">Promotion</h3>
+      <PromotionCard season={current} done={current.games >= current.scheduled} />
       <p className="stat-caption">{view === 'career' ? `${seasons.length}시즌 통산` : `시즌 ${shown.number} · ${tierOf(shown.tier).label}${shown === current ? ' · 진행 중' : ''}`}</p>
       <StatGrid s={shown} />
 

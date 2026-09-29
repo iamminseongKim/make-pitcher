@@ -5,7 +5,7 @@ import {
   staminaCost, needsHook, canRefuseHook, fatigueAfter, bullpenFinish, pitcherDecision, STAMINA,
   type PitchFlight, type PitchResult, type PlateAppearance, type PitchLog, type AtBatContext,
 } from '../src/game'
-import { newSeason, recordGame, seasonRates, TIERS, aggregate, formatIP, serviceTime, normalizeSeason } from '../src/season'
+import { newSeason, recordGame, seasonRates, TIERS, aggregate, formatIP, serviceTime, normalizeSeason, promotionStatus, callUpSchedule, seasonDone, PROMOTION_ERA, loadUnlockedTier, saveUnlockedTier, UNLOCK_KEY } from '../src/season'
 import { chartGeometry } from '../src/PitchChart'
 ;(globalThis as any).performance ??= { now: () => Date.now() }
 
@@ -135,7 +135,10 @@ assert.deepEqual(TIERS.map(t => t.label), ['Amateur', 'KBO Futures (2nd Team)', 
 const geom = chartGeometry(g.pitchLog); assert.equal(geom.x(0), 160); assert(geom.y(-1) < geom.y(1))
 
 /* ── Save round-trip and legacy migration ── */
-const memory = new Map<string, string>(); Object.defineProperty(globalThis, 'localStorage', { value: { getItem: (k: string) => memory.get(k) ?? null } })
+const memory = new Map<string, string>(); Object.defineProperty(globalThis, 'localStorage', { value: { getItem: (k: string) => memory.get(k) ?? null, setItem: (k: string, v: string) => memory.set(k, v) } })
+assert.equal(loadUnlockedTier(), 0, 'a fresh device starts in Amateur')
+saveUnlockedTier(3); assert.equal(loadUnlockedTier(), 3); saveUnlockedTier(9); assert.equal(loadUnlockedTier(), 4)
+memory.set(UNLOCK_KEY, 'garbage'); assert.equal(loadUnlockedTier(), 0)
 p.created = true
 memory.set(SAVE_KEY, JSON.stringify({ profile: { ...p, difficulty: 'LEGEND' }, game: g, season: s, history }))
 assert.equal(loadSave().game.pitchLog.length, g.pitchLog.length); assert.equal(loadSave().season.games, 1); assert.equal(loadSave().history.length, 2)
@@ -216,6 +219,24 @@ assert(hitsOver(6000, () => f, { balls: 3, strikes: 1, history: Array(4).fill(g.
   const early = bullpenFinish({ ...mid, totalOuts: 12 })
   if (early.runsFor > early.runsAgainst) assert.equal(pitcherDecision(early), 'ND', 'under 5 IP is no decision')
   Math.random = original
+}
+
+/* ── Promotion / call-up / demotion ── */
+{
+  const line = (tier: number, games: number, outs: number, runs: number, extra: object = {}) => ({ ...newSeason(tier, 1), games, outs, runs, strikeouts: Math.round(outs / 3), walks: Math.round(outs / 15), ...extra })
+  const good = promotionStatus(line(0, 30, 540, 50)) // ERA 2.50
+  assert(good.canPromote && !good.callUp && !good.demote)
+  assert(!promotionStatus(line(0, 30, 540, 100)).canPromote, 'ERA 5.00 does not promote from Amateur')
+  assert(!promotionStatus(line(0, 30, 240, 10)).canPromote, 'needs 100 IP')
+  assert(promotionStatus(line(1, 12, 180, 10)).callUp, 'dominant 12 starts earn a call-up')
+  assert(!promotionStatus(line(1, 12, 180, 50)).callUp)
+  assert(promotionStatus(line(2, 30, 300, 80)).demote, `ERA ${(80 * 27 / 300).toFixed(2)} ≥ ${PROMOTION_ERA[2] + 2} demotes`)
+  assert(!promotionStatus(line(0, 30, 300, 150)).demote, 'no demotion below Amateur')
+  assert(!promotionStatus(line(4, 30, 540, 10)).canPromote && promotionStatus(line(4, 30, 540, 10)).top)
+  assert.equal(callUpSchedule(line(1, 12, 180, 10)), 18); assert.equal(callUpSchedule(line(1, 28, 180, 10)), 5)
+  assert(seasonDone({ ...newSeason(), games: 30 }) && !seasonDone({ ...newSeason(1, 2, 1, 18), games: 17 }))
+  // A call-up keeps the calendar year: two records, one pro year.
+  assert.equal(serviceTime([{ ...newSeason(1, 1, 1), games: 12 }], newSeason(2, 2, 1, 18)).label, 'Year 1 Pro')
 }
 
 let fullSeason = newSeason()

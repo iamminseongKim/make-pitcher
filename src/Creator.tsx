@@ -1,9 +1,10 @@
 import { useState, type CSSProperties } from 'react'
-import { ArrowLeft, ArrowRight, Check, Hand } from 'lucide-react'
+import { ArrowLeft, ArrowRight, Check, Hand, LockKeyhole } from 'lucide-react'
 import { ARM_SLOTS, PITCHES, STARTER_LEVELS, clamp, createPreviewFlight, extensionOf, planeSteepness, releaseHeightOf, type ArmSlot, type Hand as ThrowHand, type PitcherProfile, type PitchType } from './game'
 import { TIERS } from './season'
 
-export function Creator({ initialProfile, onSave, editing, onClose }: { initialProfile: PitcherProfile; onSave: (p: PitcherProfile) => void; editing: boolean; onClose?: () => void }) {
+export function Creator({ initialProfile, onSave, editing, onClose, unlockedTier = 0 }: { initialProfile: PitcherProfile; onSave: (p: PitcherProfile, tier: number) => void; editing: boolean; onClose?: () => void; unlockedTier?: number }) {
+  const [tier, setTier] = useState(0)
   const [name, setName] = useState(initialProfile.name === 'ROOKIE' && !editing ? '' : initialProfile.name)
   const [height, setHeight] = useState(initialProfile.height)
   const [hand, setHand] = useState<ThrowHand>(initialProfile.hand)
@@ -18,7 +19,7 @@ export function Creator({ initialProfile, onSave, editing, onClose }: { initialP
       ...initialProfile.arsenal[p.id], unlocked: starters.includes(p.id),
       velocityLevel: starters.includes(p.id) ? level : 1, controlLevel: starters.includes(p.id) ? level : 1, breakLevel: starters.includes(p.id) ? level : 1,
     }])) as PitcherProfile['arsenal']
-    onSave({ ...initialProfile, name: name.trim().slice(0, 14), height, hand, armSlot, arsenal, created: true })
+    onSave({ ...initialProfile, name: name.trim().slice(0, 14), height, hand, armSlot, arsenal, created: true }, Math.min(tier, unlockedTier))
   }
   // Live physical readout: what this frame does to a four-seamer.
   const body = { height, armSlot }
@@ -52,7 +53,7 @@ export function Creator({ initialProfile, onSave, editing, onClose }: { initialP
       <div className="form-label">팔 각도 <span>오버핸드 = 라이징 · 낮을수록 옆으로 휜다</span></div>
       <div className="slot-grid">{(Object.keys(ARM_SLOTS) as ArmSlot[]).map(slot => <button className={armSlot === slot ? 'slot active' : 'slot'} key={slot} onClick={() => setArmSlot(slot)}><b>{ARM_SLOTS[slot].label}</b><span>{ARM_SLOTS[slot].angle}</span></button>)}</div>
       {!editing && <><div className="form-label">주무기 <span>적게 고를수록 강하게 시작</span></div><div className="starter-grid">{PITCHES.map(p => <button key={p.id} className={starters.includes(p.id) ? 'starter active' : 'starter'} onClick={() => toggleStarter(p.id)} style={{ '--pitch-color': p.color } as CSSProperties}><i /><span>{p.short}</span>{starters.includes(p.id) && <Check size={13} />}</button>)}</div><div className="starter-bonus">{starters.length}개 선택 <span>시작 Lv.{STARTER_LEVELS[clamp(starters.length, 1, 3) as 1 | 2 | 3]}</span></div>
-        <div className="ladder" aria-label="리그 단계"><small>커리어 사다리 · 리그가 곧 난이도</small><ol>{TIERS.map((t, i) => <li key={t.id} className={i === 0 ? 'on' : ''}><b>{t.short}</b><span>{t.kr}</span></li>)}</ol></div></>}
+        <div className="ladder" role="radiogroup" aria-label="시작 리그 (난이도)"><small>{unlockedTier ? '시작 리그 · 해금된 리그에서 시작 가능' : '첫 커리어는 Amateur에서 시작 · 승격하면 다음 캐릭터부터 선택 가능'}</small><ol>{TIERS.map((t, i) => { const locked = i > unlockedTier; return <li key={t.id}><button role="radio" aria-checked={tier === i} disabled={locked} className={tier === i ? 'on' : locked ? 'locked' : ''} onClick={() => setTier(i)}><b>{t.short}</b><span>{locked ? <LockKeyhole size={10} /> : t.kr}</span></button></li> })}</ol></div></>}
       <button className="primary-button creator-submit" disabled={!valid} onClick={save}>{editing ? '저장' : '마운드로'} <ArrowRight size={19} /></button>
     </section>
   </div>

@@ -22,19 +22,35 @@ export type Tier = typeof TIERS[number]
 export const tierOf = (i: number | undefined): Tier => TIERS[Math.max(0, Math.min(TIERS.length - 1, Math.floor(i ?? 0)))]
 /** A full rotation turn: a starter takes the ball about 30 times a season. */
 export const SEASON_GAMES = 30
+
+/**
+ * Leagues unlocked on this device, shared by every character: a fresh account always starts
+ * in Amateur, and reaching a league (promotion or call-up) unlocks it for future characters.
+ */
+export const UNLOCK_KEY = 'ace-project-unlocks-v1'
+export function loadUnlockedTier(): number {
+  try { const n = Number(JSON.parse(localStorage.getItem(UNLOCK_KEY) || '{}').maxTier); return Number.isFinite(n) ? Math.max(0, Math.min(4, Math.floor(n))) : 0 } catch { return 0 }
+}
+export function saveUnlockedTier(tier: number) {
+  try { localStorage.setItem(UNLOCK_KEY, JSON.stringify({ maxTier: Math.max(0, Math.min(4, Math.floor(tier))) })) } catch { /* storage optional */ }
+}
 export const FIP_CONSTANT = 3.1
 
 export interface Season {
   number: number; tier: number; games: number; wins: number; losses: number; saves: number
   outs: number; runs: number; hits: number; walks: number; hbp: number; homeRuns: number; strikeouts: number; atBats: number; pitches: number
   lastGameId: number
+  /** Calendar year of the career. A mid-season call-up opens a new record in the same year. */
+  year: number
+  /** Starts on this club's schedule (a call-up only gets the rest of the year). */
+  scheduled: number
 }
-export const newSeason = (tier = 0, number = 1): Season => ({ number, tier, games: 0, wins: 0, losses: 0, saves: 0, outs: 0, runs: 0, hits: 0, walks: 0, hbp: 0, homeRuns: 0, strikeouts: 0, atBats: 0, pitches: 0, lastGameId: -1 })
+export const newSeason = (tier = 0, number = 1, year = number, scheduled = SEASON_GAMES): Season => ({ number, year, scheduled, tier, games: 0, wins: 0, losses: 0, saves: 0, outs: 0, runs: 0, hits: 0, walks: 0, hbp: 0, homeRuns: 0, strikeouts: 0, atBats: 0, pitches: 0, lastGameId: -1 })
 /** Fills fields added after v2 so old saves keep loading. */
 export const normalizeSeason = (s: Partial<Season> | undefined, fallbackNumber = 1): Season => {
   const base = newSeason(0, fallbackNumber)
   const merged = { ...base, ...s }
-  return { ...merged, tier: Math.max(0, Math.min(TIERS.length - 1, Math.floor(Number(merged.tier) || 0))) }
+  return { ...merged, year: Number(merged.year) || merged.number, scheduled: Number(merged.scheduled) || SEASON_GAMES, tier: Math.max(0, Math.min(TIERS.length - 1, Math.floor(Number(merged.tier) || 0))) }
 }
 
 export const gameWon = (g: GameState) => pitcherDecision(g) === 'W'
@@ -75,11 +91,13 @@ export function seasonRates(s: Season) {
 }
 
 /** Seasons at KBO Futures or above count as professional service time. */
+export const seasonDone = (s: Season) => s.games >= (s.scheduled ?? SEASON_GAMES)
 export function serviceTime(history: Season[], current: Season) {
   const all = [...history, current]
   const firstPro = all.find(s => s.tier >= 1)
-  const proYears = all.filter(s => s.tier >= 1 && (s.games > 0 || s === current)).length
-  const amateurYears = all.filter(s => s.tier === 0 && (s.games > 0 || s === current)).length
+  const years = (pro: boolean) => new Set(all.filter(s => (s.tier >= 1) === pro && (s.games > 0 || s === current)).map(s => s.year ?? s.number)).size
+  const proYears = years(true)
+  const amateurYears = years(false)
   return {
     debutSeason: firstPro?.number ?? null,
     proYears,
@@ -87,6 +105,41 @@ export function serviceTime(history: Season[], current: Season) {
     label: firstPro ? `Year ${proYears} Pro` : `Amateur Year ${Math.max(1, amateurYears)}`,
   }
 }
+
+/* ───────────────────────── Promotion / call-up / demotion ───────────────────────── */
+
+/** ERA and FIP a pitcher must beat at each level to move up (MLB has no next level; its value only anchors demotion). */
+export const PROMOTION_ERA = [4.5, 4.2, 3.9, 3.6, 3.6] as const
+export const PROMOTION = { minOuts: 300, callUpGames: 10, callUpOuts: 150, callUpMargin: { era: 1.5, fip: 1 }, demoteMargin: 2, demoteMinOuts: 90 } as const
+export const eraOf = (s: Season) => s.outs ? s.runs * 27 / s.outs : Infinity
+export const fipOf = (s: Season) => s.outs ? (13 * s.homeRuns + 3 * (s.walks + s.hbp) - 2 * s.strikeouts) / (s.outs / 3) + FIP_CONSTANT : Infinity
+export interface Criterion { label: string; value: string; goal: string; met: boolean }
+export interface PromotionStatus { canPromote: boolean; callUp: boolean; demote: boolean; top: boolean; threshold: number; season: Criterion[]; callUpCriteria: Criterion[] }
+export function promotionStatus(s: Season): PromotionStatus {
+  const tier = Math.max(0, Math.min(TIERS.length - 1, s.tier))
+  const top = tier === TIERS.length - 1
+  const t = PROMOTION_ERA[tier], era = eraOf(s), fip = fipOf(s)
+  const fmt = (n: number) => Number.isFinite(n) ? n.toFixed(2) : '—'
+  const season: Criterion[] = [
+    { label: 'ERA', value: fmt(era), goal: `≤ ${t.toFixed(2)}`, met: era <= t },
+    { label: 'FIP', value: fmt(fip), goal: `≤ ${t.toFixed(2)}`, met: fip <= t },
+    { label: 'IP', value: formatIP(s.outs), goal: `≥ ${PROMOTION.minOuts / 3}`, met: s.outs >= PROMOTION.minOuts },
+  ]
+  const callUpCriteria: Criterion[] = [
+    { label: '경기', value: String(s.games), goal: `≥ ${PROMOTION.callUpGames}`, met: s.games >= PROMOTION.callUpGames },
+    { label: 'IP', value: formatIP(s.outs), goal: `≥ ${PROMOTION.callUpOuts / 3}`, met: s.outs >= PROMOTION.callUpOuts },
+    { label: 'ERA', value: fmt(era), goal: `≤ ${(t - PROMOTION.callUpMargin.era).toFixed(2)}`, met: era <= t - PROMOTION.callUpMargin.era },
+    { label: 'FIP', value: fmt(fip), goal: `≤ ${(t - PROMOTION.callUpMargin.fip).toFixed(2)}`, met: fip <= t - PROMOTION.callUpMargin.fip },
+  ]
+  return {
+    top, threshold: t, season, callUpCriteria,
+    canPromote: !top && season.every(c => c.met),
+    callUp: !top && !seasonDone(s) && callUpCriteria.every(c => c.met),
+    demote: tier > 0 && s.outs >= PROMOTION.demoteMinOuts && era >= t + PROMOTION.demoteMargin,
+  }
+}
+/** Remaining starts after a call-up (at least five). */
+export const callUpSchedule = (s: Season) => Math.max(5, (s.scheduled ?? SEASON_GAMES) - s.games)
 
 export function gameTeam(g: GameState) {
   const names = tierOf(g.tier).teams

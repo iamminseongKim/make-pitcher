@@ -1,8 +1,8 @@
 import { sfx, disposeAudio } from './audio'
-import { TIERS, SEASON_GAMES, aggregate, formatIP, newSeason, recordGame, seasonRates, gameTeam, serviceTime, tierOf, type Season } from './season'
+import { TIERS, loadUnlockedTier, saveUnlockedTier, aggregate, callUpSchedule, promotionStatus, seasonDone as isSeasonDone, formatIP, newSeason, recordGame, seasonRates, gameTeam, serviceTime, tierOf, type Season } from './season'
 import { PitchChart } from './PitchChart'
 import { Creator } from './Creator'
-import { CareerHub } from './CareerHub'
+import { CareerHub, PromotionCard } from './CareerHub'
 import { Logo } from './Logo'
 import { useEffect, useRef, useState, type CSSProperties, type PointerEvent } from 'react'
 import { Activity, ArrowLeft, ArrowRight, Check, CircleHelp, Crosshair, Eye, Flame, History, LockKeyhole, RotateCcw, Settings2, Sparkles, Trophy, Volume2, VolumeX, Zap } from 'lucide-react'
@@ -44,6 +44,8 @@ function App() {
   const [game, setGame] = useState<GameState>(initial.game)
   const [season, setSeason] = useState<Season>(initial.season)
   const [history, setHistory] = useState<Season[]>(initial.history)
+  // Leagues this device has reached with any character (difficulty unlocks).
+  const [unlockedTier, setUnlockedTier] = useState(() => Math.max(loadUnlockedTier(), initial.profile.created ? initial.season.tier : 0, ...initial.history.map(h => h.tier)))
   const [selected, setSelected] = useState<PitchType>(PITCHES.find(p => initial.profile.arsenal[p.id].unlocked)?.id ?? 'FOUR_SEAM')
   const [target, setTarget] = useState({ x: .45, y: .45 })
   const [panel, setPanel] = useState<Panel>('none')
@@ -86,7 +88,8 @@ function App() {
   const team = gameTeam(game)
   const league = tierOf(game.tier)
   const seasonView = recordGame(season, game)
-  const seasonDone = seasonView.games >= SEASON_GAMES
+  const seasonDone = isSeasonDone(seasonView)
+  const promo = promotionStatus(seasonView)
   const careerLine = aggregate([...history, seasonView])
   const service = serviceTime(history, seasonView)
   const unlocked = PITCHES.filter(p => profile.arsenal[p.id].unlocked).map(p => p.id)
@@ -107,6 +110,8 @@ function App() {
     anim: animRef.current, batted: battedRef.current, result: resultRef.current, now: 0,
   }
 
+  useEffect(() => { if (profile.created && season.tier > unlockedTier) setUnlockedTier(season.tier) }, [profile.created, season.tier, unlockedTier])
+  useEffect(() => { saveUnlockedTier(unlockedTier) }, [unlockedTier])
   useEffect(() => { try { localStorage.setItem(SAVE_KEY, JSON.stringify({ profile, game, season, history })) } catch { /* storage optional */ } }, [profile, game, season, history])
 
   const timers = useRef(new Set<number>())
@@ -258,7 +263,8 @@ function App() {
   const resetAtBatRefs = () => {
     lastFlightRef.current = null; seenRef.current = { speeds: [], types: [] }; logOverrideRef.current = null; animRef.current = IDLE
   }
-  const continueGame = (promote = false) => {
+  type Move = 'next' | 'promote' | 'repeat' | 'demote' | 'callup'
+  const continueGame = (move: Move = 'next') => {
     if (!summary) return
     if (summary.finished) {
       const win = summary.finished === 'WIN', loss = summary.finished === 'LOSS'
@@ -266,9 +272,14 @@ function App() {
       const fatigue = fatigueAfter(game, profile.stamina)
       setProfile(p => ({ ...p, trainingPoints: p.trainingPoints + bonus, fatigue, stamina: 100 - fatigue }))
       let nextSeason = seasonView
-      if (seasonDone) {
+      if (move === 'callup' && promo.callUp) {
+        // Mid-season call-up: same year, a new club, the rest of the schedule.
         setHistory(h => [...h, seasonView])
-        nextSeason = newSeason(promote ? Math.min(TIERS.length - 1, season.tier + 1) : season.tier, season.number + 1)
+        nextSeason = newSeason(season.tier + 1, season.number + 1, seasonView.year, callUpSchedule(seasonView))
+      } else if (seasonDone) {
+        setHistory(h => [...h, seasonView])
+        const tier = promo.demote ? season.tier - 1 : move === 'promote' && promo.canPromote ? season.tier + 1 : season.tier
+        nextSeason = newSeason(tier, season.number + 1, seasonView.year + 1)
       }
       setSeason(nextSeason)
       setGame(g => newGame(g, nextSeason.tier))
@@ -330,7 +341,7 @@ function App() {
 
       <main className={`game-shell shake-${shake % 2}`}>
         <header className="app-header">
-          <Logo sub={`S${season.number} · G${Math.min(SEASON_GAMES, season.games + 1)}/${SEASON_GAMES} · ${careerLine.wins}승 ${careerLine.losses}패`} />
+          <Logo sub={`S${season.number} · G${Math.min(season.scheduled, season.games + 1)}/${season.scheduled} · ${careerLine.wins}승 ${careerLine.losses}패`} />
           <div className="header-actions">
             <div className="tp-pill" aria-label={`훈련 포인트 ${profile.trainingPoints}`}><Zap size={13} fill="currentColor" /><strong>{profile.trainingPoints.toLocaleString()}</strong>{tpPop && <em key={tpPop.key} className="tp-pop">+{tpPop.n}</em>}</div>
             <button className="icon-button" onClick={() => openPanel('career')} aria-label="커리어 기록실"><Trophy size={17} /></button>
@@ -444,8 +455,15 @@ function App() {
       {summary.finished && game.pulled && <p className="inning-note">{formatIP(game.totalOuts)}이닝 후 강판 · 불펜 {game.bullpenRuns}실점 · 교체 시점 {game.exitLead > 0 ? `${game.exitLead}점 리드` : game.exitLead < 0 ? `${-game.exitLead}점 열세` : '동점'}</p>}
       {summary.finished && <p className="fatigue-note">다음 등판 시작 체력 <b>{100 - fatigueAfter(game, profile.stamina)}</b>{fatigueAfter(game, profile.stamina) > 0 ? ' · 혹사 여파' : ' · 정상 휴식'}</p>}
       {summary.finished && <p className="inning-note">{formatIP(game.totalOuts)} IP · {game.strikeouts}K · {game.hits}피안타 · {game.homeRuns ?? 0}HR · {game.walks}볼넷 · {game.pitches}구</p>}
-      {summary.finished && <><PitchChart pitches={game.pitchLog} /><div className="season-stats">{Object.entries(seasonRates(seasonView)).slice(0, 4).map(([k, v]) => <div key={k}><small>{k}</small><strong>{v}</strong></div>)}</div><p>Season {season.number} · {seasonView.games}/{SEASON_GAMES} games · {seasonView.wins}W–{seasonView.losses}L{seasonView.saves ? ` · ${seasonView.saves}SV` : ''}</p>{seasonDone && <div className="season-summary"><h2>Season Summary</h2><p>{league.label} 시즌 완료. 다음 무대에 도전하거나 현재 리그를 반복하세요.</p>{game.tier < TIERS.length - 1 && <button className="primary-button" onClick={() => continueGame(true)}>승격 도전 → {TIERS[game.tier + 1].label}</button>}</div>}</>}
-      <button className={seasonDone && game.tier < TIERS.length - 1 ? 'secondary-button' : 'primary-button'} onClick={() => continueGame()}>{summary.finished ? (seasonDone ? '현재 리그 반복' : '다음 경기') : `${summary.inning + 1}회 초 등판`} <ArrowRight size={18} /></button>
+      {summary.finished && <><PitchChart pitches={game.pitchLog} /><div className="season-stats">{Object.entries(seasonRates(seasonView)).slice(0, 4).map(([k, v]) => <div key={k}><small>{k}</small><strong>{v}</strong></div>)}</div><p>Season {season.number} · {seasonView.games}/{seasonView.scheduled} games · {seasonView.wins}W–{seasonView.losses}L{seasonView.saves ? ` · ${seasonView.saves}SV` : ''}</p>
+        {seasonDone && <h2 className="season-title">Season Summary · {league.label}</h2>}
+        <PromotionCard season={seasonView} done={seasonDone} /></>}
+      {!summary.finished ? <button className="primary-button" onClick={() => continueGame()}>{summary.inning + 1}회 초 등판 <ArrowRight size={18} /></button>
+        : seasonDone ? (promo.demote ? <button className="primary-button" onClick={() => continueGame('demote')}>강등 → {TIERS[game.tier - 1].label} <ArrowRight size={18} /></button>
+          : promo.canPromote ? <><button className="primary-button" onClick={() => continueGame('promote')}>승격 → {TIERS[game.tier + 1].label} <ArrowRight size={18} /></button><button className="secondary-button" onClick={() => continueGame('repeat')}>현재 리그 잔류</button></>
+          : <button className="primary-button" onClick={() => continueGame('repeat')}>{league.short} 새 시즌 <ArrowRight size={18} /></button>)
+        : promo.callUp ? <><button className="primary-button" onClick={() => continueGame('callup')}>콜업 수락 → {TIERS[game.tier + 1].label} <ArrowRight size={18} /></button><button className="secondary-button" onClick={() => continueGame()}>잔류하고 다음 경기</button></>
+        : <button className="primary-button" onClick={() => continueGame()}>다음 경기 <ArrowRight size={18} /></button>}
       {summary.finished && <div className="sheet-actions"><button className="secondary-button" onClick={() => openPanel('training')}><Zap size={15} /> 구종 강화</button><button className="secondary-button" onClick={() => openPanel('career')}>커리어 기록실</button></div>}
     </section></div>}
 
@@ -464,7 +482,7 @@ function App() {
         ? <button className="secondary-button danger" onClick={refuseHook}>한 타자만 더! <small>경기당 1번만 거부 가능 · 다음 경기 피로 +6</small></button>
         : <p className="hook-final">이미 한 번 버텼습니다. 이번엔 공을 넘겨야 합니다.</p>}
     </section></div>}
-    {!profile.created && <Creator initialProfile={profile} onSave={p => { setProfile(p); const first = PITCHES.find(def => p.arsenal[def.id].unlocked)!.id; setSelected(first); setTrainingPitch(first); setSeason(newSeason()); setHistory([]); setGame(newGame(undefined, 0)) }} editing={false} />}
+    {!profile.created && <Creator initialProfile={profile} unlockedTier={unlockedTier} onSave={(p, tier) => { setProfile(p); const first = PITCHES.find(def => p.arsenal[def.id].unlocked)!.id; setSelected(first); setTrainingPitch(first); setSeason(newSeason(tier)); setHistory([]); setGame(newGame(undefined, tier)) }} editing={false} />}
     {panel === 'profile' && profile.created && <Creator initialProfile={profile} onSave={p => { setProfile(p); setPanel('career') }} editing onClose={() => setPanel('career')} />}
     {panel === 'career' && <CareerHub profile={profile} history={history} current={seasonView} onClose={() => setPanel('none')} onEdit={() => setPanel('profile')} />}
     {panel === 'training' && <div className="overlay" onPointerDown={e => { if (e.target === e.currentTarget) setPanel('none') }}><section className="sheet training-sheet" role="dialog" aria-modal="true" aria-label="훈련실">
@@ -493,7 +511,7 @@ function App() {
       <div className="help-step"><b>04</b><div><strong>기세와 스카우팅</strong><p>헛스윙·삼진이 쌓인 타자는 조급해져 유인구에 더 손이 나가고, 안타를 친 타자는 감을 잡습니다. 타자 카드의 한 줄 리포트를 확인하세요.</p></div></div>
       <div className="help-options">
         <button onClick={() => setShowZone(!showZone)}><Settings2 size={16} /> 스트라이크 존 선 <span>{showZone ? 'ON' : 'OFF'}</span></button>
-        <button className={resetArmed ? 'reset-confirm' : ''} onClick={() => { if (resetArmed) resetAll(); else setResetArmed(true) }}><RotateCcw size={16} /> {resetArmed ? '한 번 더 누르면 기록 삭제' : '새 선수로 시작'} <span>{resetArmed ? '확인' : 'RESET'}</span></button>
+        <button className={resetArmed ? 'reset-confirm' : ''} onClick={() => { if (resetArmed) resetAll(); else setResetArmed(true) }}><RotateCcw size={16} /> {resetArmed ? '한 번 더 누르면 기록 삭제 (리그 해금은 유지)' : '새 선수로 시작'} <span>{resetArmed ? '확인' : 'RESET'}</span></button>
       </div>
       <button className="primary-button" onClick={() => { setResetArmed(false); setPanel('none') }}>마운드로 <Check size={18} /></button>
     </section></div>}
