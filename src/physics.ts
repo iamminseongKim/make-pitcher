@@ -16,6 +16,15 @@ export function releaseHeightOf(p: Pick<PitcherProfile, 'height' | 'armSlot'>) {
   const ratio = { OVERHAND: .97, THREE_QUARTER: .88, SIDEARM: .64, SUBMARINE: .34 }[p.armSlot]
   return Math.round(p.height / 100 * ratio * 100) / 100
 }
+/**
+ * Physical trade-offs. Height buys extension, plane and ride, but long levers are harder to repeat
+ * (command spread) and a big frame burns more energy per pitch. Compact pitchers get the reverse.
+ * Neutral band: 178–188 cm.
+ */
+export function physiqueCost(height: number) {
+  const tall = clamp((height - 188) / 22, 0, 1), short = clamp((178 - height) / 18, 0, 1)
+  return { commandMul: 1 + tall * .35 - short * .12, staminaMul: 1 + tall * .2 - short * .08 }
+}
 /** 0 = flat approach, 1 = steep downhill plane (tall, over-the-top). */
 export const planeSteepness = (releaseHeight: number) => clamp((releaseHeight - 1.45) / .45, 0, 1)
 /** Four-seam ride multiplier: backspin axis is purest over the top, and a taller frame adds carry. */
@@ -119,7 +128,7 @@ export function createFlight(pitch: PitchDefinition, stat: PitchStat, profile: P
   // Fatigue: below 40 stamina the arm drags — velocity drops and command spreads.
   const tired = profile.stamina < 40 ? (40 - profile.stamina) / 40 * .45 : 0
   const overthrow = meter > .9 && meter <= 1 ? (meter - .9) * 1.8 : 0
-  const spread = dispersion(stat.controlLevel) * q.spreadMul + tired * .4 + overthrow * .3
+  const spread = dispersion(stat.controlLevel) * q.spreadMul * physiqueCost(profile.height).commandMul + tired * .4 + overthrow * .3
   const angle = Math.random() * Math.PI * 2
   const offset = spread * (.35 + Math.random() * .65)
   let movement = movementFor(pitch, stat, profile)

@@ -508,3 +508,7 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--cyan); outl
 .ladder li button.on { border-color: var(--turf); background: #0f2e21; box-shadow: 0 0 0 1px var(--turf) inset }
 .ladder li button.locked, .ladder li button:disabled { opacity: .45 }
 .ladder li button span { display: flex; align-items: center; min-height: 12px }
+
+.physique { grid-template-columns: repeat(3, minmax(0, 1fr)) }
+.physique .penalty b { color: #ff9aa4 }
+.physique .bonus b { color: #7fe0a8 }

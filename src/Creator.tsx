@@ -1,6 +1,6 @@
 import { useState, type CSSProperties } from 'react'
 import { ArrowLeft, ArrowRight, Check, Hand, LockKeyhole } from 'lucide-react'
-import { ARM_SLOTS, PITCHES, STARTER_LEVELS, clamp, createPreviewFlight, extensionOf, planeSteepness, releaseHeightOf, type ArmSlot, type Hand as ThrowHand, type PitcherProfile, type PitchType } from './game'
+import { ARM_SLOTS, PITCHES, STARTER_LEVELS, clamp, createPreviewFlight, extensionOf, physiqueCost, planeSteepness, releaseHeightOf, type ArmSlot, type Hand as ThrowHand, type PitcherProfile, type PitchType } from './game'
 import { TIERS } from './season'
 
 export function Creator({ initialProfile, onSave, editing, onClose, unlockedTier = 0 }: { initialProfile: PitcherProfile; onSave: (p: PitcherProfile, tier: number) => void; editing: boolean; onClose?: () => void; unlockedTier?: number }) {
@@ -26,6 +26,8 @@ export function Creator({ initialProfile, onSave, editing, onClose, unlockedTier
   const ext = extensionOf(body), rel = releaseHeightOf(body)
   const fs = createPreviewFlight(PITCHES[0], { unlocked: true, velocityLevel: 30, controlLevel: 30, breakLevel: 50, mastery: 0 }, { ...initialProfile, height, armSlot, hand }, { x: 0, y: -.8 })
   const plane = Math.round(planeSteepness(rel) * 100)
+  const cost = physiqueCost(height)
+  const pctDelta = (m: number) => `${m >= 1 ? '+' : ''}${Math.round((m - 1) * 100)}%`
   return <div className="overlay creator-overlay">
     <section className="sheet creator-sheet" aria-label="투수 만들기">
       <div className="sheet-top"><span className="eyebrow">{editing ? 'PROFILE' : 'DRAFT DAY'}</span>{editing && <button className="icon-button" onClick={onClose} aria-label="닫기"><ArrowLeft size={18} /></button>}</div>
@@ -42,11 +44,13 @@ export function Creator({ initialProfile, onSave, editing, onClose, unlockedTier
         <div><small>릴리스 높이</small><b>{rel.toFixed(2)}<i>m</i></b></div>
         <div><small>포심 IVB</small><b>{fs.ivb > 0 ? '+' : ''}{fs.ivb}<i>cm</i></b></div>
         <div><small>하이존 VAA</small><b>{fs.vaa.toFixed(1)}<i>°</i></b></div>
+        <div className={cost.commandMul > 1.01 ? 'penalty' : cost.commandMul < .99 ? 'bonus' : ''}><small>제구 편차</small><b>{pctDelta(cost.commandMul)}</b></div>
+        <div className={cost.staminaMul > 1.01 ? 'penalty' : cost.staminaMul < .99 ? 'bonus' : ''}><small>투구당 체력</small><b>{pctDelta(cost.staminaMul)}</b></div>
         <div className="plane"><small>다운힐 플레인</small><span><i style={{ width: `${plane}%` }} /></span></div>
       </div>
       <label className="form-label" htmlFor="pitcher-name">이름</label>
       <input id="pitcher-name" className="name-input" maxLength={14} value={name} onChange={e => setName(e.target.value)} placeholder="등판할 이름" autoComplete="off" />
-      <div className="form-label row-label"><span>키 <small>클수록 익스텐션·릴리스 높이↑</small></span><strong>{height} <small>CM</small></strong></div>
+      <div className="form-label row-label"><span>키 <small>크면 구위↑ 제구·체력↓ · 작으면 반대</small></span><strong>{height} <small>CM</small></strong></div>
       <input className="height-range" type="range" min="160" max="210" step="1" value={height} onChange={e => setHeight(Number(e.target.value))} aria-label="키" />
       <div className="form-label">던지는 손</div>
       <div className="choice-row"><button className={hand === 'R' ? 'choice active' : 'choice'} onClick={() => setHand('R')}><Hand size={16} /> 우투</button><button className={hand === 'L' ? 'choice active' : 'choice'} onClick={() => setHand('L')}><Hand size={16} /> 좌투</button></div>

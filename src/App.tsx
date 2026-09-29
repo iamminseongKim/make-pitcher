@@ -143,7 +143,7 @@ function App() {
     playOutcome(call, o, f)
     if (reward) setTpPop({ n: reward, key: performance.now() })
 
-    const stamina = clamp(profile.stamina - staminaCost(f.timingError + SWEET_CENTER, game) + (ev.inningOver ? STAMINA.inningRest : 0), 0, 100)
+    const stamina = clamp(profile.stamina - staminaCost(f.timingError + SWEET_CENTER, game, profile.height) + (ev.inningOver ? STAMINA.inningRest : 0), 0, 100)
     setProfile(prev => ({
       ...prev, trainingPoints: prev.trainingPoints + reward, stamina,
       arsenal: { ...prev.arsenal, [f.pitch.id]: { ...prev.arsenal[f.pitch.id], mastery: prev.arsenal[f.pitch.id].mastery + ev.mastery } },

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import {
   PITCHES, createFlight, createPreviewFlight, defaultProfile, pointOnFlight, newGame, applyOutcome, closeInning, loadSave, SAVE_KEY, resolvePitch,
   releaseQuality, SWEET_CENTER, sweetSpot, batterAdaptation, tunnelRead, extensionOf, releaseHeightOf, zoneCell, scoutingReport, batterSide, HITS,
-  staminaCost, needsHook, canRefuseHook, fatigueAfter, bullpenFinish, pitcherDecision, STAMINA,
+  physiqueCost, staminaCost, needsHook, canRefuseHook, fatigueAfter, bullpenFinish, pitcherDecision, STAMINA,
   type PitchFlight, type PitchResult, type PlateAppearance, type PitchLog, type AtBatContext,
 } from '../src/game'
 import { newSeason, recordGame, seasonRates, TIERS, aggregate, formatIP, serviceTime, normalizeSeason, promotionStatus, callUpSchedule, seasonDone, PROMOTION_ERA, loadUnlockedTier, saveUnlockedTier, UNLOCK_KEY } from '../src/season'
@@ -64,6 +64,20 @@ p.hand = 'R'; p.armSlot = 'THREE_QUARTER'
   const high = createPreviewFlight(PITCHES[0], stat, tall, { x: 0, y: -.9 }), low = createPreviewFlight(PITCHES[0], stat, tall, { x: 0, y: .9 })
   assert(high.vaa > low.vaa, 'high fastballs arrive flatter than low ones')
   assert(ft.vaa > -7 && ft.vaa < -2, `plausible VAA (${ft.vaa})`)
+}
+
+/* ── Physique trade-offs: tall = worse command & stamina, compact = better ── */
+{
+  assert.deepEqual(physiqueCost(183), { commandMul: 1, staminaMul: 1 })
+  assert(physiqueCost(208).commandMul > 1.25 && physiqueCost(208).staminaMul > 1.15)
+  assert(physiqueCost(165).commandMul < 1 && physiqueCost(165).staminaMul < 1)
+  const calm = newGame()
+  assert(staminaCost(SWEET_CENTER, calm, 208) > staminaCost(SWEET_CENTER, calm, 183))
+  seeded(5)
+  const stat = { unlocked: true, velocityLevel: 40, controlLevel: 40, breakLevel: 40, mastery: 0 }
+  const spread = (height: number) => { let d = 0; for (let i = 0; i < 2000; i++) { const fl = createFlight(PITCHES[0], stat, { ...defaultProfile(), height }, { x: .5, y: .5 }, SWEET_CENTER - .08); d += Math.hypot(fl.landing.x - .5, fl.landing.y - .5) } return d }
+  assert(spread(208) > spread(183) * 1.15, 'tall pitchers scatter more')
+  Math.random = original
 }
 
 /* ── Tunneling: wider window, high-IVB + drop pairing ── */
@@ -243,4 +257,4 @@ let fullSeason = newSeason()
 for (let id = 1; id <= 5; id++) fullSeason = recordGame(fullSeason, { ...g, id })
 assert.equal(fullSeason.games, 5); assert.equal(fullSeason.wins, 5)
 assert.equal(newSeason(4, 2).tier, 4); assert.equal(newSeason(4, 2).games, 0)
-console.log('Regression checks passed: physics, release meter & meatball, IVB/VAA/extension, tunneling, batter memory & mood, stamina & bullpen, tiers, saves/FIP/IP, save migration, chart mapping.')
+console.log('Regression checks passed: physics, release meter & meatball, IVB/VAA/extension, tunneling, batter memory & mood, stamina & bullpen, physique trade-offs, tiers, saves/FIP/IP, save migration, chart mapping.')

@@ -1,5 +1,5 @@
-import { decisionPoint, movementProgress, planeSteepness, tunnelRead, type PitchFlight } from './physics'
-export { createFlight, createPreviewFlight, pointOnFlight, decisionPoint, perceivedLanding, tunnelScore, tunnelRead, releaseQuality, extensionOf, releaseHeightOf, approachAngle, planeSteepness, TUNNEL_POINT, SWEET_CENTER, MEATBALL_MISS } from './physics'
+import { decisionPoint, movementProgress, physiqueCost, planeSteepness, tunnelRead, type PitchFlight } from './physics'
+export { physiqueCost, createFlight, createPreviewFlight, pointOnFlight, decisionPoint, perceivedLanding, tunnelScore, tunnelRead, releaseQuality, extensionOf, releaseHeightOf, approachAngle, planeSteepness, TUNNEL_POINT, SWEET_CENTER, MEATBALL_MISS } from './physics'
 export type { PitchFlight, TunnelRead } from './physics'
 import { TIERS, newSeason, normalizeSeason, tierOf, type Season } from './season'
 export type PitchType = 'FOUR_SEAM' | 'SINKER' | 'CUTTER' | 'SPLITTER' | 'CHANGEUP' | 'SLIDER' | 'CURVE' | 'SWEEPER'
@@ -265,10 +265,10 @@ export function loadSave(): SaveData {
  * high-stress pitches (runners on, deep counts) cost more. Between innings he only catches his breath.
  */
 export const STAMINA = { perPitch: 1, maxEffort: .8, stress: .35, inningRest: 3, hookAt: 30, maxRefusals: 1, maxFatigue: 45 } as const
-export function staminaCost(meter: number, g: Pick<GameState, 'bases' | 'balls' | 'strikes'>) {
+export function staminaCost(meter: number, g: Pick<GameState, 'bases' | 'balls' | 'strikes'>, height = 185) {
   const maxEffort = meter > .9 && meter <= 1 ? STAMINA.maxEffort : 0
   const stress = (g.bases.some(Boolean) ? STAMINA.stress : 0) + (g.balls === 3 || (g.balls >= 2 && g.strikes === 2) ? STAMINA.stress : 0)
-  return STAMINA.perPitch + maxEffort + stress
+  return (STAMINA.perPitch + maxEffort + stress) * physiqueCost(height).staminaMul
 }
 /** The manager comes out once the tank is low (or the pitch count is out of hand). */
 export const needsHook = (stamina: number, g: Pick<GameState, 'pitches' | 'over' | 'pulled'>) => !g.over && !g.pulled && (stamina < STAMINA.hookAt || g.pitches >= 120)
