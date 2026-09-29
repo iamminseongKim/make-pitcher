@@ -6,57 +6,108 @@
 
 ```bash
 pnpm install
-pnpm dev        # http://localhost:5173
+pnpm dev          # http://localhost:5173
 pnpm build
-pnpm sim        # 투구 전략별 K% / BB% / 피안타율 밸런스 시뮬레이션
-pnpm sim:platoon # 구종 × 같은 손/반대 손 헛스윙률 점검
+pnpm test         # 회귀 테스트 (물리·미터·타자 AI·스태미너·시즌 기록·세이브 마이그레이션)
+pnpm sim          # 투구 전략 × 리그별 K% / BB% / 피안타율 밸런스 시뮬레이션
+pnpm sim:platoon  # 구종 × 같은 손/반대 손 헛스윙률 점검
 ```
 
 ## 플레이
 
-1. 이름·키·투구 손·팔 각도·주무기(1~3개)·난이도를 정하고 등판합니다.
-2. 상대 팀 9명 타선이 순서대로 들어옵니다. 타자마다 우타/좌타/스위치, 핫존, 약점 구종이 다릅니다.
-3. 구종 칩을 고르고 존(안이든 밖이든)을 터치한 뒤, **투구 → 릴리스!** 두 번 탭합니다. 데스크톱은 스페이스바도 됩니다.
-4. 3아웃이면 우리 타선 공격이 자동으로 진행되고, 9회가 끝나면 승패가 결정됩니다. 이길수록 상대 리그가 강해집니다.
-5. TP로 훈련실에서 구속·제구·무브먼트를 올리고 새 구종을 해금합니다.
+1. 이름·키·투구 손·팔 각도·주무기(1~3개)를 정하고 **Amateur**에서 데뷔합니다. 키와 팔 각도가 익스텐션·릴리스 높이·IVB·VAA를 결정하며, 생성 화면에서 바로 확인할 수 있습니다.
+2. 상대 9명 타선이 순서대로 들어옵니다. 타자마다 우타/좌타/스위치, 핫존, 약점 구종, 기세가 다릅니다.
+3. 구종 칩 → 존 터치 → **투구 → 릴리스!** 두 번 탭 (데스크톱은 스페이스바).
+4. 3아웃이면 우리 타선 공격이 자동 진행되고, 9회가 끝나면 승패가 결정됩니다.
+5. 체력이 떨어지면 감독이 올라옵니다. 공을 넘기면 불펜이 경기를 마무리합니다.
+6. TP로 훈련실에서 구속·제구·무브먼트를 올리고 새 구종을 해금합니다.
 
-## 수싸움 요소
+## 리그 = 난이도 (Difficulty System)
 
-- **유인구**: 타자는 공이 "어디로 올 것처럼 보이는지"로 스윙을 결정합니다. 존 밖으로 빠지는 공도 스트라이크처럼 보이면 헛스윙, 참으면 볼입니다. 2스트라이크 이후 타자는 더 넓게 휘두릅니다.
-- **하이 패스트볼**: 포심의 라이징은 타자가 끝까지 믿지 않아 존 위쪽 경계에서 배트가 공 아래로 지나갑니다.
-- **피치 터널**: 직전 공과 타자의 판단 시점까지 같은 길로 오다 갈라지면 `TUNNEL` 표시가 뜨고, 타자가 구종을 읽지 못할 확률이 올라갑니다.
+별도의 루키/프로/레전드 선택은 없앴습니다. 현재 리그가 곧 난이도이며, 헤더 아래 리그 배너와 데스크톱 좌측 패널의 사다리에 항상 표시됩니다.
+
+| 리그 | 컨택 | 선구안 | 인식 지연 | 유인구 반응 | TP |
+|---|---|---|---|---|---|
+| Amateur | −0.10 | −0.15 | +45ms (일찍 결정) | ×1.25 | ×1.0 |
+| KBO Futures (2nd Team) | −0.05 | −0.07 | +22ms | ×1.12 | ×1.2 |
+| KBO League (1st Team) | 0 | 0 | 0 | ×1.00 | ×1.5 |
+| Minor League (AAA) | +0.05 | +0.07 | −15ms | ×0.90 | ×1.8 |
+| Major League Baseball (MLB) | +0.10 | +0.15 | −30ms (끝까지 봄) | ×0.80 | ×2.2 |
+
+인식 지연은 타자가 스윙을 결정하는 시점(플레이트 도착 ≈0.21초 전)에 더해집니다. 지연이 클수록 타자는 변화를 덜 보고 결정합니다.
+시즌은 선발 로테이션 기준 **30경기**이며, 시즌이 끝나면 승격 도전 또는 현재 리그 반복을 고릅니다.
+
+## 릴리스 미터와 실투 ("!" Meatball Penalty)
+
+- 바늘은 0→1로 올라갔다가 1→2로 되돌아옵니다. 타이밍은 **바늘이 지나온 경로 위의 위치**로 판정하므로 정점 이후의 늦은 릴리스는 대칭으로 봐주지 않습니다.
+- 황금 구간(PERFECT)의 폭은 제구 Lv.1 8% → Lv.99 22%.
+- 탄착 분산 = 제구 분산 × 배율. 배율은 구간 중앙 0.1× → 구간 경계 0.3× → 구간 밖 1단위 벗어날 때마다 +7×로 **연속적으로** 커집니다 (GOOD ≤ 0.05, 그 밖은 EARLY/LATE).
+- 구간 밖으로 0.14 이상 벗어나거나(빨간 빗금 구간), 정점을 지나 한참 늦거나, 미터를 방치하면 **실투(MISS)**:
+  - 투수와 조준점 위에 맥박처럼 뛰는 **"!"** 경고, 콜아웃 `실투!`
+  - 공이 무브먼트 65%를 잃고 벨트 높이 한가운데로 몰립니다(목표 무시), 구속 −5km/h
+  - 타자: 존 스윙 ≥93%, 구종 자동 인식, 타이밍 오차 0, 컨택 품질 +0.32, 타구 속도 +0.38, 홈런 파워 조건 완화
+
+## 타자 기억 (Batter Adaptation Memory)
+
+- 한 경기 안에서 타자별로 지난 타석의 투구(구종·위치·결과)를 기억합니다.
+- 2·3번째 대결에서 지난 타석과 **같은 구종**(비중 ×0.45), **같은 존 칸**(3×3, 비중 ×0.6), **같은 구종+칸**(×0.9)을 반복할수록 적응도가 올라갑니다 (첫 재대결 ×0.8, 세 번째부터 ×1.0).
+- 적응도는 구종 인식 +30%p, 예상 궤적 오차 −40%, 컨택 품질 +0.24, 타구 속도 +0.25, 유인구 반응 −30%로 반영됩니다.
+- **지난 타석 오버레이**: 재대결 타자가 들어서면 존 위에 반투명 ◆ 마커(구종 색·머리글자, 실투는 !)와 타석별 시퀀스 배너가 표시됩니다. `지난 타석` 토글로 끌 수 있습니다.
+- 조준 중 적응도가 35%를 넘으면 `읽힘 N%` 경고 배지가 뜹니다.
+
+## 구위: 키·팔 각도·익스텐션·IVB·VAA
+
+- **익스텐션** = 1.55m + (키−160)×0.012 + 팔 각도 보정. 실제 비행 거리(18.44m − 익스텐션)가 짧아져 비행 시간이 줄고 **체감 구속**이 올라갑니다. 타자의 늦음(lateness) 판정은 체감 구속을 씁니다.
+- **릴리스 높이** = 키 × 팔 각도 비율 (오버핸드 0.97 … 언더핸드 0.34). 높을수록 **다운힐 플레인**이 가파릅니다.
+- **IVB**: 포심 라이드는 오버핸드 ×1.25, 쓰리쿼터 ×1.0, 사이드암 ×0.7, 언더핸드 ×0.45에 키 보정이 곱해집니다.
+- **VAA**: 릴리스 높이·익스텐션·구속·목표 높이·IVB로 등가속도 모델을 풀어 계산합니다 (하이존 포심 ≈ −4~−5°).
+- **라이징 착시**: 포심 IVB가 30cm를 넘을수록, 그리고 플레인이 가파를수록 타자가 믿는 라이드가 줄어 높은 직구 아래로 배트가 지나갑니다 (`떠오르는 직구`). 가파른 플레인은 낮게 떨어지는 공의 컨택도 깎습니다 (`수직 낙차`).
+
+## 피치 터널 (Tunneling)
+
+- 터널 지점을 플레이트 앞 **25ft(7.6m)** 로 두고, 그 지점에서 직전 공과의 거리가 **0.85 유닛** 이내면 같은 공으로 보입니다 (기존 판단 시점 비교·0.42 허용치보다 훨씬 관대, smoothstep 감쇠).
+- 분기 점수 = 도착 지점 차이 + 구속 차이 + **하이-로우 페어 보너스**(IVB ≥28cm 패스트볼 뒤 큰 낙차 구종, `HI-LO TUNNEL`).
+- 효과 증폭: 인식률 −50%p×터널, 유인구 반응 +50%×터널, 컨택 품질 −0.2×터널, 타이밍 예측이 직전 공 구속에 80%까지 끌려감.
+
+## 스태미너 · 교체 · 혹사
+
+- 선발은 약 100구를 던질 수 있습니다: 투구당 1, 전력투구(미터 0.9 이상) +0.8, 주자 있음 +0.35, 풀카운트급 카운트 +0.35. 이닝 사이 회복은 +3뿐입니다.
+- 체력 40 미만부터 구속·제구가 떨어지고, **체력 30 미만 또는 120구**가 되면 타자 사이에 감독이 올라와 **교체 신호**를 줍니다.
+- 교체 신호는 **경기당 1번만 거부**할 수 있고, 두 번째 신호에서는 반드시 공을 넘겨야 합니다.
+- 교체되면 그 경기 등판은 즉시 끝나고 결과 화면 → 다음 경기 / 구종 강화(스탯 찍기)로 넘어갑니다. 남은 이닝은 불펜으로 즉시 계산되어 팀 승패만 정해집니다. 불펜 실점은 투수에게 기록되지 않습니다. 5이닝 이상 + 리드 상태로 내려가 팀이 이기면 승리투수, 뒤진 채 내려가 지면 패전, 그 외는 노 디시전.
+- **혹사 여파**: 100구 초과분 ×1.5, 체력 25 미만으로 끝낸 만큼 ×1.2, 교체 거부 1회당 6만큼 다음 경기 시작 체력이 깎입니다 (최대 45). 정상 등판이면 다음 경기는 100으로 시작합니다.
+
+## 커리어 기록실 (Career Stats)
+
+헤더의 트로피 버튼(데스크톱은 좌측 패널)에서 엽니다.
+
+- **서비스 타임**: KBO Futures 이상 시즌부터 프로 연차로 셉니다 (`Year 3 Pro`, 아마추어는 `Amateur Year N`), 데뷔 시즌 표시.
+- **Traditional**: G, IP(야구식 `4.2`), W, L, SV, ERA, WHIP, H, HR, BB, SO, HBP
+- **Advanced**: FIP = (13·HR + 3·(BB+HBP) − 2·SO) / IP + 3.10, K/9, BB/9, K/BB, BAA
+- 시즌 탭으로 시즌별/통산 전환, 시즌별 표(가로 스크롤)에서 행을 눌러 이동합니다.
+- ERA는 비자책 구분 없이 투수 책임 실점 기준, WHIP는 HBP 제외, BAA는 볼넷·HBP 제외.
+- SV는 완투 경기에서 9회를 1–3점 리드로 시작해 지켜낸 경우입니다.
+
+## 수싸움 보조 기능
+
+- **타자 기세(Confidence) 미터**: 헛스윙·삼진·범타는 기세를 꺾고(조급함 → 멘붕), 안타·볼넷은 올립니다(자신감 → 감 잡음). 조급한 타자는 유인구에 최대 30% 더 손이 나가고, 감 잡은 타자는 컨택이 좋아집니다.
+- **투구 전 스카우팅 한 줄**: 타자 카드에 약점 구종, 콜드존, 지난 타석에서 노리고 있는 구종, 아직 못 본 구종을 요약합니다 (데스크톱 우측 패널에 전체 리포트와 타석 히스토리).
+
+## 기존 수싸움 요소
+
+- **유인구**: 타자는 공이 "어디로 올 것처럼 보이는지"로 스윙을 결정합니다. 2스트라이크 이후 더 넓게 휘두릅니다.
 - **눈높이**: 높은 직구 다음 낮은 변화구는 인식률이 떨어집니다.
-- **플래툰**: 같은 손 타자에겐 바깥으로 도망가는 슬라이더·스위퍼, 반대 손 타자에겐 체인지업·스플리터가 강합니다. 싱커는 같은 손, 커터는 반대 손 타자 몸쪽에서 먹힌 타구를 만듭니다.
-- **타이밍**: 타자는 가장 빠른 공에 맞추고 본 공의 구속에 적응합니다. 같은 구종을 연속으로 던지면 타이밍을 잡힙니다.
+- **플래툰**: 같은 손 타자엔 슬라이더·스위퍼, 반대 손 타자엔 체인지업·스플리터가 강합니다.
+- **타이밍**: 타자는 가장 빠른 공에 맞추고 본 공의 구속에 적응합니다.
 
-진행 상황은 `localStorage`(`ace-project-save-v2`)에 저장되며 v1 세이브의 투수 정보는 자동으로 이어집니다.
+## UI
 
-## Season and pitch systems
+다크 슬레이트 · 스타디움 잔디 그린 · 화이트 · 네온 앰버/시안 테마, 홈플레이트 방패 로고. 모바일은 한 화면 세로 레이아웃(경기장 캔버스가 남는 높이에 맞춰 축소), 700px 이상은 카드형, 1100px 이상은 좌측 투수 패널 / 우측 스카우팅 패널이 붙는 3단 레이아웃입니다. 1920×1080 · 1366×768 · 1024×768 · 768×1024 · 390×844 · 375×667에서 가로 스크롤·텍스트 잘림 없이 투구 버튼이 화면 안에 들어오는지 확인했습니다.
 
-Five-game seasons begin in Amateur and progress through KBO Futures, KBO League,
-Triple-A, and MLB. At season end, choose promotion or repeat the current tier;
-at MLB, repeat starts another MLB season. Rosters are fictional, tier-themed
-opponents, not a live roster feed. Difficulty selection is an additional modifier.
+## 저장
 
-The final screen plots every recorded pitch in catcher-view coordinates, with a
-nine-cell strike zone, plate, pitch colors, counts, and percentages. Upgrade Pitch
-Arsenal opens the existing training shop without dismissing the result. Game rewards
-and season records are committed when continuing, avoiding duplicate rewards on reload.
+`localStorage`(`ace-project-save-v2`)에 프로필·경기·현재 시즌·지난 시즌 기록을 저장합니다. 이전 세이브의 난이도 값은 무시되고, 새 필드(타자 기억, 기세, HR/HBP, 세이브, 피로)는 기본값으로 채워집니다. 과거 경기의 투구 위치나 시즌 기록은 만들어내지 않습니다.
 
-Season ERA uses all runs allowed (the game has no errors/unearned runs), WHIP uses
-hits plus walks and excludes HBP, and BAA excludes walks/HBP. Rates use recorded
-outs rather than decimal baseball innings. Ties count as games but not wins/losses.
-Older saves retain career data; unavailable historical pitch locations are not invented.
+## 모듈
 
-Modules: `physics.ts` owns continuous trajectories and tunneling; `game.ts` owns
-pitch resolution and game rules; `season.ts` owns tiers and season aggregation;
-`render.ts` draws the canvas; `PitchChart.tsx` draws the SVG chart; `audio.ts` owns
-sound generation; `App.tsx` coordinates UI. Strike-three slowdown changes visual
-time only, preserving the AI's physical flight duration. Reduced-motion preferences
-suppress the slowdown and impact camera zoom.
-
-Validation: `pnpm test`, `pnpm build`, and `pnpm sim:platoon`. The regression suite
-checks smooth trajectories across all pitches, arm slots, hands and movement levels,
-stat accounting, completed-season aggregation, old-save migration, chart coordinates,
-and seeded pitch-recognition behavior. The platoon simulation reports distributions
-for manual balance review rather than asserting exact random outcomes.
+`physics.ts` 궤적·릴리스 미터·체형(IVB/VAA/익스텐션)·터널, `game.ts` 타자 AI·경기 규칙·타자 기억·스태미너/불펜, `season.ts` 리그·시즌/통산 집계·세이버 지표, `render.ts` 캔버스, `CareerHub.tsx` 기록실, `Creator.tsx` 투수 생성, `PitchChart.tsx` 경기 투구 차트, `App.tsx` UI 조율.
