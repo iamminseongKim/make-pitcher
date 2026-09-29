@@ -567,3 +567,11 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--cyan); outl
   .tp-pill strong { font-size: 16px }
 }
 @media (max-width: 360px) { .logo-mark { width: 28px; height: 28px } .logo-type small { font-size: 9px } }
+
+/* Compact TP chip (final override) */
+.tp-pill { height: 28px; padding: 0 8px 0 6px; gap: 3px; border-radius: 8px; background: #221a08; border: 1px solid #5a4312; color: var(--amber) }
+.tp-pill svg { width: 12px; height: 12px }
+.tp-pill strong { font-size: 15px; font-weight: 800; letter-spacing: .2px }
+@media (max-width: 430px) { .tp-pill { height: 28px; padding: 0 7px 0 5px } .tp-pill strong { font-size: 14px } }
+.special-tp { display: inline-block; margin: 0 0 10px !important; padding: 6px 12px; border-radius: 999px; background: #221a08; border: 1px solid var(--amber); color: var(--amber) !important; font-size: 13px !important; font-weight: 900 }
+.special-tp b { color: #fff }
