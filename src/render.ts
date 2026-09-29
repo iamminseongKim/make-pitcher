@@ -1,4 +1,4 @@
-import { ARM_SLOTS, clamp, decisionPoint, dispersion, pointOnFlight, type Hand, type PitchFlight, type PitchLog, type PitcherProfile, PITCHES } from './game'
+import { ARM_SLOTS, TUNNEL_POINT, clamp, dispersion, pointOnFlight, type Hand, type PitchFlight, type PitchLog, type PitcherProfile, type PlateAppearance, PITCHES } from './game'
 
 export const STAGE = { width: 390, height: 432, zoneX: 195, zoneY: 232, zoneW: 124, zoneH: 136 }
 const ZX = (x: number) => STAGE.zoneX + x * STAGE.zoneW / 2
@@ -22,6 +22,8 @@ export interface RenderScene {
   showZone: boolean
   heat: number[][] | null
   log: PitchLog[]
+  /** Earlier plate appearances of the hitter now at the plate (drawn as a ghost overlay). */
+  memory: PlateAppearance[] | null
   anim: BatterAnim
   batted: BattedBall | null
   result: { text: string; tone: string; at: number }
@@ -51,25 +53,25 @@ function drawScenery(ctx: CanvasRenderingContext2D, now: number) {
     const c = document.createElement('canvas'); c.width = w * 2; c.height = h * 2
     const g = c.getContext('2d')!; g.scale(2, 2)
     const sky = g.createLinearGradient(0, 0, 0, 140)
-    sky.addColorStop(0, '#050b14'); sky.addColorStop(1, '#0d1c2a')
+    sky.addColorStop(0, '#070b16'); sky.addColorStop(1, '#131c2e')
     g.fillStyle = sky; g.fillRect(0, 0, w, 140)
     // Stands
-    g.fillStyle = '#111d2b'; g.fillRect(0, 34, w, 80)
+    g.fillStyle = '#141d30'; g.fillRect(0, 34, w, 80)
     for (let row = 0; row < 7; row++) for (let col = 0; col < 56; col++) {
       const x = col * 7.2 + (row % 2) * 3.6 - 4, y = 40 + row * 10
       const hue = (col * 37 + row * 91) % 100
-      g.fillStyle = hue < 8 ? '#e0574c88' : hue < 14 ? '#f2d16b77' : hue < 22 ? '#8fb3ff55' : '#3b4a5f99'
+      g.fillStyle = hue < 8 ? '#ffb40077' : hue < 14 ? '#22d3ee66' : hue < 22 ? '#f5f8fc44' : '#34435e99'
       g.beginPath(); g.arc(x, y, 2.4, 0, Math.PI * 2); g.fill()
       g.fillRect(x - 2.6, y + 2, 5.2, 4)
     }
     // Outfield wall + ad boards
-    g.fillStyle = '#0e3a2a'; g.fillRect(0, 112, w, 12)
+    g.fillStyle = '#0c3b24'; g.fillRect(0, 112, w, 12)
     const ads = ['ACE', 'K-ZONE', '155', 'PITCH LAB', 'ACE']
     g.font = '800 8px system-ui'; g.textAlign = 'center'
-    ads.forEach((a, i) => { roundRect(g, i * 80 + 4, 113, 72, 10, 2, i % 2 ? '#123e56' : '#3a1f1f'); g.fillStyle = '#e8f0e0aa'; g.fillText(a, i * 80 + 40, 121) })
+    ads.forEach((a, i) => { roundRect(g, i * 80 + 4, 113, 72, 10, 2, i % 2 ? '#0e2c3d' : '#2a2210'); g.fillStyle = i % 2 ? '#22d3eecc' : '#ffb400cc'; g.fillText(a, i * 80 + 40, 121) })
     // Grass with mow stripes
     const grass = g.createLinearGradient(0, 124, 0, h)
-    grass.addColorStop(0, '#1d5a35'); grass.addColorStop(1, '#123d25')
+    grass.addColorStop(0, '#1d7a45'); grass.addColorStop(1, '#0f4a2a')
     g.fillStyle = grass; g.fillRect(0, 124, w, h - 124)
     for (let i = 0; i < 10; i++) { g.fillStyle = i % 2 ? '#ffffff06' : '#00000010'; g.fillRect(0, 124 + i * 14, w, 14) }
     // Mound
@@ -222,6 +224,38 @@ function drawZone(ctx: CanvasRenderingContext2D, scene: RenderScene) {
   }
 }
 
+/** Ghost markers of the pitches this hitter saw in earlier plate appearances. */
+function drawMemory(ctx: CanvasRenderingContext2D, memory: PlateAppearance[]) {
+  ctx.save()
+  memory.forEach((pa, i) => {
+    const alpha = i === memory.length - 1 ? .78 : .42
+    pa.pitches.forEach(p => {
+      const x = ZX(p.x), y = ZY(p.y), def = PITCHES.find(d => d.id === p.pitch)!
+      ctx.globalAlpha = alpha
+      ctx.fillStyle = def.color + '40'; ctx.strokeStyle = def.color; ctx.lineWidth = 1.4
+      ctx.beginPath(); ctx.moveTo(x, y - 7); ctx.lineTo(x + 7, y); ctx.lineTo(x, y + 7); ctx.lineTo(x - 7, y); ctx.closePath(); ctx.fill(); ctx.stroke()
+      ctx.fillStyle = '#f5f8fc'; ctx.font = '800 7px system-ui'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'
+      ctx.fillText(def.short.slice(0, 1), x, y + .5)
+      if (p.meatball) { ctx.fillStyle = '#ff4d5e'; ctx.fillText('!', x + 8, y - 7) }
+    })
+  })
+  ctx.globalAlpha = 1; ctx.textBaseline = 'alphabetic'
+  ctx.restore()
+}
+
+/** Pulsing critical-miss warning. */
+function drawWarning(ctx: CanvasRenderingContext2D, x: number, y: number, now: number, size = 11) {
+  const pulse = 1 + Math.sin(now / 70) * .12
+  ctx.save()
+  ctx.translate(x, y); ctx.scale(pulse, pulse)
+  ctx.shadowColor = '#ff4d5e'; ctx.shadowBlur = 16
+  ctx.fillStyle = '#ff4d5e'; ctx.beginPath(); ctx.arc(0, 0, size, 0, Math.PI * 2); ctx.fill()
+  ctx.shadowBlur = 0; ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5; ctx.stroke()
+  ctx.fillStyle = '#fff'; ctx.font = `900 ${Math.round(size * 1.5)}px system-ui`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'
+  ctx.fillText('!', 0, 1)
+  ctx.restore()
+}
+
 function drawLog(ctx: CanvasRenderingContext2D, log: PitchLog[], hideLast: boolean) {
   const items = hideLast ? log.slice(0, -1) : log
   items.forEach((p, i) => {
@@ -252,15 +286,14 @@ function drawPreview(ctx: CanvasRenderingContext2D, scene: RenderScene) {
   if (scene.previousFlight) {
     ctx.setLineDash([2, 4]); drawTrail(ctx, scene.previousFlight, 1, .45, 1.5); ctx.setLineDash([])
     // Tunnel window at the hitter's commit point.
-    const td = decisionPoint(f)
-    const a = projectedBall(f, td), b = projectedBall(scene.previousFlight, td)
+    const a = projectedBall(f, TUNNEL_POINT), b = projectedBall(scene.previousFlight, TUNNEL_POINT)
     const good = scene.tunnel > .35
-    ctx.strokeStyle = good ? '#e6ff7a' : '#ffffff55'; ctx.lineWidth = good ? 2 : 1
+    ctx.strokeStyle = good ? '#22d3ee' : '#ffffff55'; ctx.lineWidth = good ? 2 : 1
     ctx.setLineDash(good ? [] : [3, 3])
     ctx.beginPath(); ctx.arc((a.x + b.x) / 2, (a.y + b.y) / 2, 9 + Math.hypot(a.x - b.x, a.y - b.y) / 2, 0, Math.PI * 2); ctx.stroke()
     ctx.setLineDash([])
     if (good) {
-      ctx.fillStyle = '#e6ff7a'; ctx.font = '900 10px system-ui'; ctx.textAlign = 'left'
+      ctx.fillStyle = '#22d3ee'; ctx.font = '900 10px system-ui'; ctx.textAlign = 'left'
       ctx.fillText(`TUNNEL ${Math.round(scene.tunnel * 100)}`, Math.max(a.x, b.x) + 14, (a.y + b.y) / 2 + 3)
     }
   }
@@ -335,7 +368,7 @@ function drawResult(ctx: CanvasRenderingContext2D, result: RenderScene['result']
   ctx.translate(195, 138); ctx.scale(pop, pop)
   ctx.textAlign = 'center'
   ctx.font = `italic 900 ${big ? 44 : 34}px 'Barlow Condensed', system-ui`
-  const color = { k: '#e6ff7a', hr: '#ff5a4e', hit: '#ffb36b', out: '#8fe3ff', ball: '#f4f6f0', strike: '#f4f6f0', foul: '#f4f6f0' }[result.tone] ?? '#fff'
+  const color = { k: '#ffb400', hr: '#ff4d5e', hit: '#ffcf70', out: '#22d3ee', ball: '#f5f8fc', strike: '#f5f8fc', foul: '#f5f8fc', miss: '#ff4d5e' }[result.tone] ?? '#fff'
   ctx.lineWidth = 7; ctx.strokeStyle = '#05080cdd'; ctx.lineJoin = 'round'
   ctx.strokeText(result.text, 0, 0)
   ctx.fillStyle = color; ctx.fillText(result.text, 0, 0)
@@ -353,15 +386,17 @@ export function renderScene(ctx: CanvasRenderingContext2D, scene: RenderScene) {
   drawScenery(ctx, now)
   drawPitcher(ctx, scene.profile, flight, t)
   drawZone(ctx, scene)
+  if (scene.memory?.length) drawMemory(ctx, scene.memory)
   drawLog(ctx, scene.log, Boolean(flight))
   if (!flight && scene.previewFlight) drawPreview(ctx, scene)
   if (!flight) drawCrosshair(ctx, scene)
   // The batter stands in front of the zone plane; the ball passes in front of him near the plate.
   drawBatter(ctx, scene.batterSide, scene.anim, scene.teamColor, now)
   if (flight && t <= 1) drawBall(ctx, flight, t)
+  if (flight?.meatball && t <= 1) { drawWarning(ctx, 195, 104, now); drawWarning(ctx, ZX(flight.target.x), ZY(flight.target.y) - 20, now, 8) }
   if (scene.batted) drawBatted(ctx, scene.batted, now)
   if (punch > 0) {
-    ctx.strokeStyle = `rgba(230,255,122,${punch})`; ctx.lineWidth = 2 + punch * 3
+    ctx.strokeStyle = `rgba(255,180,0,${punch})`; ctx.lineWidth = 2 + punch * 3
     ctx.strokeRect(ZX(-1), ZY(-1), STAGE.zoneW, STAGE.zoneH)
     ctx.beginPath(); ctx.arc(STAGE.zoneX, STAGE.zoneY, 20 + impactAge * 90, 0, Math.PI * 2); ctx.stroke()
   }
