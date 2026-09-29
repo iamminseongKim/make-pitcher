@@ -512,3 +512,58 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--cyan); outl
 .physique { grid-template-columns: repeat(3, minmax(0, 1fr)) }
 .physique .penalty b { color: #ff9aa4 }
 .physique .bonus b { color: #7fe0a8 }
+
+/* Aging, retirement & legacy */
+.career-actions { display: flex; flex-wrap: wrap; gap: 6px }
+.ghost-button.danger { color: #ff9aa4; border-color: #5a1f28 }
+.ghost-button.danger.armed { background: #3a1016; border-color: var(--danger) }
+.age-note, .age-hint { font-size: 11px !important; color: var(--muted) !important; margin: 8px 0 0 }
+.retire-note { color: #ff9aa4 !important; font-size: 13px !important; font-weight: 800 }
+.retire-sheet { text-align: left }
+.retire-sheet h1 { margin-bottom: 12px }
+.plaque { position: relative; padding: 14px; border-radius: 14px; background: linear-gradient(135deg, var(--panel-2), var(--panel)); border: 1px solid var(--line-2) }
+.plaque.hof { border-color: var(--amber); box-shadow: 0 0 24px #ffb40033 }
+.plaque h2 { margin: 2px 0 2px; font-size: 24px }
+.plaque p { margin: 0 }
+.hof-badge { display: inline-flex; align-items: center; gap: 4px; padding: 3px 8px; border-radius: 999px; background: var(--amber); color: #1a1204; font-family: var(--display); font-weight: 900; font-size: 12px; letter-spacing: 1px }
+.plaque-stats { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 5px; margin: 10px 0 8px }
+.plaque-stats div { display: flex; flex-direction: column; padding: 6px 4px; border-radius: 8px; background: #0b1424 }
+.plaque-stats small { font-family: var(--display); font-size: 11px; color: var(--muted); font-weight: 800 }
+.plaque-stats b { font-family: var(--display); font-size: 17px }
+.plaque-reason { font-size: 11px !important; color: var(--amber) !important; font-weight: 800 }
+.legacy-next { display: flex; align-items: center; gap: 8px; margin: 14px 0 4px; padding: 10px 12px; border-radius: 10px; background: #0b2a33; border: 1px solid #22d3ee44; color: var(--cyan); font-size: 12px; font-weight: 700 }
+.legacy-next b { color: var(--amber) }
+.legacy-list { list-style: none; margin: 12px 0 0; padding: 0; display: grid; gap: 6px }
+.legacy-list button { width: 100%; display: flex; flex-direction: column; align-items: flex-start; gap: 3px; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--line-2); background: var(--panel); text-align: left }
+.legacy-list span { display: flex; align-items: center; gap: 6px; color: var(--amber) }
+.legacy-list b { color: var(--text); font-size: 14px }
+.legacy-list small { color: var(--muted); font-size: 11px }
+.legacy-list em { font-style: normal; font-family: var(--display); font-size: 13px; color: #c3cfe2 }
+@media (max-width: 380px) { .plaque-stats { grid-template-columns: repeat(3, minmax(0, 1fr)) } }
+
+/* Awards */
+.award-list { list-style: none; margin: 6px 0 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px; justify-content: flex-start }
+.award-list li { display: inline-flex; align-items: center; gap: 5px; padding: 5px 9px; border-radius: 999px; background: #221a08; border: 1px solid #5a4312; color: var(--amber); font-size: 12px; font-weight: 800 }
+.award-list li.feat { background: #0b2a33; border-color: #22d3ee55; color: var(--cyan) }
+.award-list li small { font-family: var(--display); font-size: 11px; color: var(--muted); font-weight: 800 }
+.award-list.big { justify-content: center; margin: 4px 0 8px }
+.award-list.big li { font-size: 14px; padding: 7px 12px }
+.award-rules { margin: 8px 0 0; font-size: 12px; color: var(--muted) }
+.award-rules summary { cursor: pointer; font-weight: 800; color: #c3cfe2 }
+.award-rules ul { margin: 6px 0; padding-left: 18px }
+.award-rules p { margin: 4px 0 0; font-size: 11px }
+.plaque .award-list { margin-top: 8px }
+
+/* Header: the wordmark yields to the TP pill and buttons instead of overlapping them */
+.app-header .logo { flex: 1 1 auto; min-width: 0; overflow: hidden }
+.logo-type strong { white-space: nowrap; overflow: hidden; text-overflow: ellipsis }
+.tp-pill { flex: none }
+@media (max-width: 430px) {
+  .logo-type strong span { display: none }
+  .logo-type strong { font-size: 20px }
+  .header-actions { gap: 4px }
+  .icon-button { width: 32px; height: 32px }
+  .tp-pill { height: 30px; padding: 0 7px }
+  .tp-pill strong { font-size: 16px }
+}
+@media (max-width: 360px) { .logo-mark { width: 28px; height: 28px } .logo-type small { font-size: 9px } }
