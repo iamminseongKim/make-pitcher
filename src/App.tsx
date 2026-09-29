@@ -1,9 +1,11 @@
 import { sfx, disposeAudio } from './audio'
-import { TIERS, loadUnlockedTier, saveUnlockedTier, aggregate, callUpSchedule, promotionStatus, seasonDone as isSeasonDone, formatIP, newSeason, recordGame, seasonRates, gameTeam, serviceTime, tierOf, type Season } from './season'
+import { TIERS, seasonAwards, loadUnlockedTier, saveUnlockedTier, aggregate, callUpSchedule, promotionStatus, seasonDone as isSeasonDone, formatIP, newSeason, recordGame, seasonRates, gameTeam, serviceTime, tierOf, type Season } from './season'
 import { PitchChart } from './PitchChart'
 import { Creator } from './Creator'
 import { CareerHub, PromotionCard } from './CareerHub'
 import { Logo } from './Logo'
+import { LegacyHall, RetirementSheet } from './Legacy'
+import { AGE, RETIRE_LABEL, START_AGE, ageEffects, ageStage, buildRetired, legacyBonus, loadLegacy, retirementStatus, saveLegacy, type RetireReason, type RetiredPlayer } from './retirement'
 import { useEffect, useRef, useState, type CSSProperties, type PointerEvent } from 'react'
 import { Activity, ArrowLeft, ArrowRight, Check, CircleHelp, Crosshair, Eye, Flame, History, LockKeyhole, RotateCcw, Settings2, Sparkles, Trophy, Volume2, VolumeX, Zap } from 'lucide-react'
 import {
@@ -15,7 +17,7 @@ import {
 } from './game'
 import { renderScene, STAGE, type BatterAnim, type BattedBall } from './render'
 
-type Panel = 'none' | 'training' | 'career' | 'profile' | 'help'
+type Panel = 'none' | 'training' | 'career' | 'profile' | 'help' | 'legacy'
 type Phase = 'ready' | 'charging' | 'flying' | 'result'
 const initial = loadSave()
 const IDLE: BatterAnim = { kind: 'idle', at: 0, contact: false, barrel: { x: 0, y: 0 } }
@@ -44,6 +46,8 @@ function App() {
   const [game, setGame] = useState<GameState>(initial.game)
   const [season, setSeason] = useState<Season>(initial.season)
   const [history, setHistory] = useState<Season[]>(initial.history)
+  const [legacy, setLegacy] = useState<RetiredPlayer[]>(loadLegacy)
+  const [retired, setRetired] = useState<RetiredPlayer | null>(null)
   // Leagues this device has reached with any character (difficulty unlocks).
   const [unlockedTier, setUnlockedTier] = useState(() => Math.max(loadUnlockedTier(), initial.profile.created ? initial.season.tier : 0, ...initial.history.map(h => h.tier)))
   const [selected, setSelected] = useState<PitchType>(PITCHES.find(p => initial.profile.arsenal[p.id].unlocked)?.id ?? 'FOUR_SEAM')
@@ -90,6 +94,8 @@ function App() {
   const seasonView = recordGame(season, game)
   const seasonDone = isSeasonDone(seasonView)
   const promo = promotionStatus(seasonView)
+  const retireStat = retirementStatus(profile.age, season.tier, promo.canPromote, history.length)
+  const aging = ageEffects(profile.age)
   const careerLine = aggregate([...history, seasonView])
   const service = serviceTime(history, seasonView)
   const unlocked = PITCHES.filter(p => profile.arsenal[p.id].unlocked).map(p => p.id)
@@ -123,7 +129,7 @@ function App() {
     pendingRef.current = null
     flightRef.current = null
     const { game: next, events: ev, call } = applyOutcome(game, f, r)
-    const reward = Math.round(ev.reward * league.tp)
+    const reward = Math.round(ev.reward * league.tp * aging.tpMul)
     seenRef.current = ev.paEnded ? { speeds: [], types: [] } : { speeds: [...seenRef.current.speeds, f.speed], types: [...seenRef.current.types, f.pitch.id] }
     lastFlightRef.current = ev.paEnded ? null : f
     logOverrideRef.current = ev.paEnded ? [...game.abLog, { pitch: f.pitch.id, speed: f.speed, x: f.landing.x, y: f.landing.y, px: r.barrel.x, py: r.barrel.y, call: call.text, tag: r.tags[0] ?? '' }] : null
@@ -143,7 +149,7 @@ function App() {
     playOutcome(call, o, f)
     if (reward) setTpPop({ n: reward, key: performance.now() })
 
-    const stamina = clamp(profile.stamina - staminaCost(f.timingError + SWEET_CENTER, game, profile.height) + (ev.inningOver ? STAMINA.inningRest : 0), 0, 100)
+    const stamina = clamp(profile.stamina - staminaCost(f.timingError + SWEET_CENTER, game, profile.height, profile.age) + (ev.inningOver ? STAMINA.inningRest : 0), 0, 100)
     setProfile(prev => ({
       ...prev, trainingPoints: prev.trainingPoints + reward, stamina,
       arsenal: { ...prev.arsenal, [f.pitch.id]: { ...prev.arsenal[f.pitch.id], mastery: prev.arsenal[f.pitch.id].mastery + ev.mastery } },
@@ -203,7 +209,7 @@ function App() {
     return () => cancelAnimationFrame(raf)
   }, [])
 
-  const canPitch = profile.created && !game.over && panel === 'none' && !summary && !hook && stat.unlocked && (phase === 'ready' || phase === 'charging')
+  const canPitch = profile.created && !retired && !game.over && panel === 'none' && !summary && !hook && stat.unlocked && (phase === 'ready' || phase === 'charging')
   const launch = (meter: number) => {
     if (meterStartedAtRef.current === null || flightRef.current) return
     meterStartedAtRef.current = null
@@ -268,18 +274,20 @@ function App() {
     if (!summary) return
     if (summary.finished) {
       const win = summary.finished === 'WIN', loss = summary.finished === 'LOSS'
-      const bonus = Math.round((win ? 150 : loss ? 40 : 70) * league.tp)
+      const bonus = Math.round((win ? 150 : loss ? 40 : 70) * league.tp * aging.tpMul)
       const fatigue = fatigueAfter(game, profile.stamina)
       setProfile(p => ({ ...p, trainingPoints: p.trainingPoints + bonus, fatigue, stamina: 100 - fatigue }))
       let nextSeason = seasonView
       if (move === 'callup' && promo.callUp) {
         // Mid-season call-up: same year, a new club, the rest of the schedule.
-        setHistory(h => [...h, seasonView])
-        nextSeason = newSeason(season.tier + 1, season.number + 1, seasonView.year, callUpSchedule(seasonView))
+        setHistory(h => [...h, { ...seasonView, age: seasonView.age ?? profile.age, awards: seasonAwards(seasonView) }])
+        nextSeason = { ...newSeason(season.tier + 1, season.number + 1, seasonView.year, callUpSchedule(seasonView)), age: profile.age }
       } else if (seasonDone) {
-        setHistory(h => [...h, seasonView])
+        setHistory(h => [...h, { ...seasonView, age: seasonView.age ?? profile.age, awards: seasonAwards(seasonView) }])
+        // New calendar year: one year older.
+        setProfile(p => ({ ...p, age: p.age + 1 }))
         const tier = promo.demote ? season.tier - 1 : move === 'promote' && promo.canPromote ? season.tier + 1 : season.tier
-        nextSeason = newSeason(tier, season.number + 1, seasonView.year + 1)
+        nextSeason = { ...newSeason(tier, season.number + 1, seasonView.year + 1), age: profile.age + 1 }
       }
       setSeason(nextSeason)
       setGame(g => newGame(g, nextSeason.tier))
@@ -298,6 +306,15 @@ function App() {
     sfx('ui', soundOn)
   }
   const refuseHook = () => { if (!canRefuseHook(game)) return; setGame(g => ({ ...g, refusals: (g.refusals ?? 0) + 1 })); setHook(false); sfx('ui', soundOn) }
+  /** Hang up the spikes: archive the whole career on this device and hand off to a new draftee. */
+  const retire = (reason: RetireReason) => {
+    const seasons = [...history, { ...seasonView, age: seasonView.age ?? profile.age, awards: seasonDone ? seasonAwards(seasonView) : [] }]
+    const rec = buildRetired(profile, seasons, reason)
+    const next = [...legacy, rec]
+    saveLegacy(next); setLegacy(next); setRetired(rec)
+    setSummary(null); setHook(false); setPanel('none'); meterStartedAtRef.current = null
+    sfx('cheer', soundOn)
+  }
   const resetAll = () => {
     timers.current.forEach(clearTimeout); timers.current.clear()
     resetAtBatRefs(); battedRef.current = null; resultRef.current = { text: '', tone: '', at: 0 }; flightRef.current = null; meterStartedAtRef.current = null; pendingRef.current = null
@@ -341,7 +358,7 @@ function App() {
 
       <main className={`game-shell shake-${shake % 2}`}>
         <header className="app-header">
-          <Logo sub={`S${season.number} · G${Math.min(season.scheduled, season.games + 1)}/${season.scheduled} · ${careerLine.wins}승 ${careerLine.losses}패`} />
+          <Logo sub={`${profile.age}세 · S${season.number} · G${Math.min(season.scheduled, season.games + 1)}/${season.scheduled} · ${careerLine.wins}승 ${careerLine.losses}패`} />
           <div className="header-actions">
             <div className="tp-pill" aria-label={`훈련 포인트 ${profile.trainingPoints}`}><Zap size={13} fill="currentColor" /><strong>{profile.trainingPoints.toLocaleString()}</strong>{tpPop && <em key={tpPop.key} className="tp-pop">+{tpPop.n}</em>}</div>
             <button className="icon-button" onClick={() => openPanel('career')} aria-label="커리어 기록실"><Trophy size={17} /></button>
@@ -457,13 +474,18 @@ function App() {
       {summary.finished && <p className="inning-note">{formatIP(game.totalOuts)} IP · {game.strikeouts}K · {game.hits}피안타 · {game.homeRuns ?? 0}HR · {game.walks}볼넷 · {game.pitches}구</p>}
       {summary.finished && <><PitchChart pitches={game.pitchLog} /><div className="season-stats">{Object.entries(seasonRates(seasonView)).slice(0, 4).map(([k, v]) => <div key={k}><small>{k}</small><strong>{v}</strong></div>)}</div><p>Season {season.number} · {seasonView.games}/{seasonView.scheduled} games · {seasonView.wins}W–{seasonView.losses}L{seasonView.saves ? ` · ${seasonView.saves}SV` : ''}</p>
         {seasonDone && <h2 className="season-title">Season Summary · {league.label}</h2>}
+        {seasonDone && (seasonAwards(seasonView).length > 0 || (seasonView.feats ?? []).length > 0) && <ul className="award-list big">{seasonAwards(seasonView).map(a => <li key={a} className="award"><Trophy size={14} /> {a}</li>)}{(seasonView.feats ?? []).map(f => <li key={f} className="feat"><Sparkles size={13} /> {f}</li>)}</ul>}
+        {seasonDone && seasonAwards(seasonView).length === 0 && <p className="age-hint">이번 시즌 수상 없음 · 리그별 수상 기준은 커리어 기록실에서 확인</p>}
         <PromotionCard season={seasonView} done={seasonDone} /></>}
       {!summary.finished ? <button className="primary-button" onClick={() => continueGame()}>{summary.inning + 1}회 초 등판 <ArrowRight size={18} /></button>
+        : seasonDone && retireStat.forced ? <><p className="retire-note">{RETIRE_LABEL[retireStat.forced]} — {retireStat.forced === 'AGE' ? `${profile.age}세, 몸이 더는 버티지 못합니다.` : `${profile.age}세까지 프로 계약을 따내지 못했습니다.`}</p><button className="primary-button" onClick={() => retire(retireStat.forced!)}>은퇴식 <ArrowRight size={18} /></button></>
         : seasonDone ? (promo.demote ? <button className="primary-button" onClick={() => continueGame('demote')}>강등 → {TIERS[game.tier - 1].label} <ArrowRight size={18} /></button>
           : promo.canPromote ? <><button className="primary-button" onClick={() => continueGame('promote')}>승격 → {TIERS[game.tier + 1].label} <ArrowRight size={18} /></button><button className="secondary-button" onClick={() => continueGame('repeat')}>현재 리그 잔류</button></>
           : <button className="primary-button" onClick={() => continueGame('repeat')}>{league.short} 새 시즌 <ArrowRight size={18} /></button>)
         : promo.callUp ? <><button className="primary-button" onClick={() => continueGame('callup')}>콜업 수락 → {TIERS[game.tier + 1].label} <ArrowRight size={18} /></button><button className="secondary-button" onClick={() => continueGame()}>잔류하고 다음 경기</button></>
         : <button className="primary-button" onClick={() => continueGame()}>다음 경기 <ArrowRight size={18} /></button>}
+      {summary.finished && seasonDone && !retireStat.forced && profile.age >= AGE.voluntary && <button className="secondary-button danger" onClick={() => retire('VOLUNTARY')}>여기서 은퇴 <small>{profile.age}세 · 커리어를 역대 선수에 기록</small></button>}
+      {summary.finished && seasonDone && !retireStat.forced && <p className="age-hint">다음 시즌 {profile.age + 1}세 · {ageStage(profile.age + 1)}{season.tier === 0 && profile.age + 1 >= AGE.amateurDeadline ? ` · ${AGE.amateurDeadline}세 시즌까지 프로 입성 못 하면 은퇴` : ''}{profile.age + 1 >= 38 ? ` · ${AGE.forceRetire}세 강제 은퇴` : ''}</p>}
       {summary.finished && <div className="sheet-actions"><button className="secondary-button" onClick={() => openPanel('training')}><Zap size={15} /> 구종 강화</button><button className="secondary-button" onClick={() => openPanel('career')}>커리어 기록실</button></div>}
     </section></div>}
 
@@ -482,9 +504,12 @@ function App() {
         ? <button className="secondary-button danger" onClick={refuseHook}>한 타자만 더! <small>경기당 1번만 거부 가능 · 다음 경기 피로 +6</small></button>
         : <p className="hook-final">이미 한 번 버텼습니다. 이번엔 공을 넘겨야 합니다.</p>}
     </section></div>}
-    {!profile.created && <Creator initialProfile={profile} unlockedTier={unlockedTier} onSave={(p, tier) => { setProfile(p); const first = PITCHES.find(def => p.arsenal[def.id].unlocked)!.id; setSelected(first); setTrainingPitch(first); setSeason(newSeason(tier)); setHistory([]); setGame(newGame(undefined, tier)) }} editing={false} />}
+    {!profile.created && <Creator initialProfile={profile} unlockedTier={unlockedTier} legacyBonus={legacyBonus(legacy)} legacyCount={legacy.length} onSave={(p, tier) => { setProfile({ ...p, age: START_AGE[tier], startAge: START_AGE[tier], trainingPoints: p.trainingPoints + legacyBonus(legacy) }); const first = PITCHES.find(def => p.arsenal[def.id].unlocked)!.id; setSelected(first); setTrainingPitch(first); setSeason({ ...newSeason(tier), age: START_AGE[tier] }); setHistory([]); setGame(newGame(undefined, tier)) }} editing={false} />}
     {panel === 'profile' && profile.created && <Creator initialProfile={profile} onSave={p => { setProfile(p); setPanel('career') }} editing onClose={() => setPanel('career')} />}
-    {panel === 'career' && <CareerHub profile={profile} history={history} current={seasonView} onClose={() => setPanel('none')} onEdit={() => setPanel('profile')} />}
+    {panel === 'career' && <CareerHub profile={profile} history={history} current={seasonView} onClose={() => setPanel('none')} onEdit={() => setPanel('profile')}
+      onLegacy={() => setPanel('legacy')} legacyCount={legacy.length} onRetire={retireStat.canRetire && phase !== 'flying' ? () => retire('VOLUNTARY') : null} />}
+    {panel === 'legacy' && <LegacyHall legacy={legacy} onClose={() => setPanel(profile.created ? 'career' : 'none')} />}
+    {retired && <RetirementSheet player={retired} legacy={legacy} onNext={() => { resetAll(); setRetired(null) }} />}
     {panel === 'training' && <div className="overlay" onPointerDown={e => { if (e.target === e.currentTarget) setPanel('none') }}><section className="sheet training-sheet" role="dialog" aria-modal="true" aria-label="훈련실">
       <div className="sheet-top"><span className="eyebrow">PITCH LAB</span><button className="icon-button" onClick={() => setPanel('none')} aria-label="닫기"><ArrowLeft size={18} /></button></div>
       <div className="sheet-title"><h1>훈련실</h1><div className="tp-large"><Zap size={16} fill="currentColor" /> {profile.trainingPoints} <small>TP</small></div></div>

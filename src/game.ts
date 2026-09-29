@@ -2,6 +2,7 @@ import { decisionPoint, movementProgress, physiqueCost, planeSteepness, tunnelRe
 export { physiqueCost, createFlight, createPreviewFlight, pointOnFlight, decisionPoint, perceivedLanding, tunnelScore, tunnelRead, releaseQuality, extensionOf, releaseHeightOf, approachAngle, planeSteepness, TUNNEL_POINT, SWEET_CENTER, MEATBALL_MISS } from './physics'
 export type { PitchFlight, TunnelRead } from './physics'
 import { TIERS, newSeason, normalizeSeason, tierOf, type Season } from './season'
+import { ageEffects } from './retirement'
 export type PitchType = 'FOUR_SEAM' | 'SINKER' | 'CUTTER' | 'SPLITTER' | 'CHANGEUP' | 'SLIDER' | 'CURVE' | 'SWEEPER'
 export type StatKey = 'velocityLevel' | 'controlLevel' | 'breakLevel'
 export type Hand = 'R' | 'L'
@@ -27,6 +28,10 @@ export interface PitcherProfile {
   stamina: number
   /** Stamina the arm could not recover before this start (overuse in the last game). */
   fatigue: number
+  /** Current age; +1 every new season year. */
+  age: number
+  /** Age at the draft. */
+  startAge: number
   arsenal: Record<PitchType, PitchStat>
   created: boolean
 }
@@ -227,7 +232,7 @@ export function newGame(prev?: GameState, tier = 0): GameState {
 
 export function defaultProfile(): PitcherProfile {
   return {
-    name: 'ROOKIE', height: 185, hand: 'R', armSlot: 'THREE_QUARTER', trainingPoints: 90, stamina: 100, fatigue: 0, created: false,
+    name: 'ROOKIE', height: 185, hand: 'R', armSlot: 'THREE_QUARTER', trainingPoints: 90, stamina: 100, fatigue: 0, age: 19, startAge: 19, created: false,
     arsenal: Object.fromEntries(PITCHES.map(p => [p.id, { unlocked: false, velocityLevel: 1, controlLevel: 1, breakLevel: 1, mastery: 0 }])) as Record<PitchType, PitchStat>,
   }
 }
@@ -247,6 +252,8 @@ export function loadSave(): SaveData {
     }
     const history: Season[] = Array.isArray(parsed.history) ? parsed.history.map((h: Partial<Season>, i: number) => normalizeSeason(h, i + 1)) : []
     const season = normalizeSeason(parsed.season, history.length + 1)
+    // Saves from before aging existed: a 19-year-old draftee who has aged one year per season year.
+    if (!Number.isFinite(savedProfile.age)) { profile.startAge = 19; profile.age = 19 + Math.max(0, season.year - 1) }
     const fresh = newGame(undefined, season.tier)
     const game: GameState = parsed.game?.lineup?.length === 9 ? { ...fresh, ...parsed.game } : fresh
     game.tier = clamp(Math.floor(Number(game.tier) || 0), 0, TIERS.length - 1)
@@ -265,10 +272,10 @@ export function loadSave(): SaveData {
  * high-stress pitches (runners on, deep counts) cost more. Between innings he only catches his breath.
  */
 export const STAMINA = { perPitch: 1, maxEffort: .8, stress: .35, inningRest: 3, hookAt: 30, maxRefusals: 1, maxFatigue: 45 } as const
-export function staminaCost(meter: number, g: Pick<GameState, 'bases' | 'balls' | 'strikes'>, height = 185) {
+export function staminaCost(meter: number, g: Pick<GameState, 'bases' | 'balls' | 'strikes'>, height = 185, age = 25) {
   const maxEffort = meter > .9 && meter <= 1 ? STAMINA.maxEffort : 0
   const stress = (g.bases.some(Boolean) ? STAMINA.stress : 0) + (g.balls === 3 || (g.balls >= 2 && g.strikes === 2) ? STAMINA.stress : 0)
-  return (STAMINA.perPitch + maxEffort + stress) * physiqueCost(height).staminaMul
+  return (STAMINA.perPitch + maxEffort + stress) * physiqueCost(height).staminaMul * ageEffects(age).staminaMul
 }
 /** The manager comes out once the tank is low (or the pitch count is out of hand). */
 export const needsHook = (stamina: number, g: Pick<GameState, 'pitches' | 'over' | 'pulled'>) => !g.over && !g.pulled && (stamina < STAMINA.hookAt || g.pitches >= 120)

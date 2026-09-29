@@ -7,6 +7,8 @@ import {
 } from '../src/game'
 import { newSeason, recordGame, seasonRates, TIERS, aggregate, formatIP, serviceTime, normalizeSeason, promotionStatus, callUpSchedule, seasonDone, PROMOTION_ERA, loadUnlockedTier, saveUnlockedTier, UNLOCK_KEY } from '../src/season'
 import { chartGeometry } from '../src/PitchChart'
+import { ageEffects, retirementStatus, hallOfFame, buildRetired, legacyBonus, loadLegacy, saveLegacy, LEGACY_KEY, START_AGE } from '../src/retirement'
+import { seasonAwards, gameFeat, trophyCase } from '../src/season'
 ;(globalThis as any).performance ??= { now: () => Date.now() }
 
 const seeded = (seed: number) => { Math.random = () => { seed = (seed * 1664525 + 1013904223) >>> 0; return (seed + 1) / 4294967297 } }
@@ -253,8 +255,46 @@ assert(hitsOver(6000, () => f, { balls: 3, strikes: 1, history: Array(4).fill(g.
   assert.equal(serviceTime([{ ...newSeason(1, 1, 1), games: 12 }], newSeason(2, 2, 1, 18)).label, 'Year 1 Pro')
 }
 
+/* ── Aging, retirement, legacy, awards ── */
+{
+  assert.deepEqual(ageEffects(27), { veloLoss: 0, staminaMul: 1, commandMul: 1, tpMul: 1 })
+  assert.equal(ageEffects(20).tpMul, 1.2)
+  assert(ageEffects(38).veloLoss > ageEffects(34).veloLoss && ageEffects(38).staminaMul > 1.15 && ageEffects(38).commandMul > 1.05)
+  assert(ageEffects(41).veloLoss <= 10)
+  const vet = { ...defaultProfile(), age: 38 }, kid = { ...defaultProfile(), age: 25 }
+  const stat = { unlocked: true, velocityLevel: 60, controlLevel: 60, breakLevel: 60, mastery: 0 }
+  assert(createPreviewFlight(PITCHES[0], stat, vet, { x: 0, y: 0 }).speed < createPreviewFlight(PITCHES[0], stat, kid, { x: 0, y: 0 }).speed - 5, 'velocity fades with age')
+  assert(staminaCost(SWEET_CENTER, newGame(), 185, 38) > staminaCost(SWEET_CENTER, newGame(), 185, 28))
+  assert.equal(retirementStatus(41, 4, false, 20).forced, 'AGE')
+  assert.equal(retirementStatus(25, 0, false, 6).forced, 'NO_PRO')
+  assert.equal(retirementStatus(25, 0, true, 6).forced, null, 'earning promotion at 25 keeps the career alive')
+  assert.equal(retirementStatus(22, 0, false, 0).canRetire, false); assert(retirementStatus(30, 2, false, 0).canRetire)
+  assert.deepEqual(START_AGE, [19, 21, 23, 24, 25])
+  // Awards fit the level
+  const ace = { ...newSeason(4, 9), games: 30, outs: 600, runs: 40, wins: 18, strikeouts: 250, walks: 30, homeRuns: 10 }
+  assert.deepEqual(seasonAwards(ace), ['사이영상', 'MLB 올스타', 'MLB 탈삼진왕'])
+  assert(seasonAwards({ ...ace, tier: 2 }).includes('KBO 투수 골든글러브'))
+  assert(seasonAwards({ ...ace, tier: 1 }).includes('퓨처스리그 우수 투수상'))
+  assert.deepEqual(seasonAwards({ ...ace, runs: 150 }), ['MLB 탈삼진왕'])
+  const cg = { ...newGame(), over: true, totalOuts: 27, runsFor: 1, runsAgainst: 0, hits: 0, walks: 0, hbp: 0 }
+  assert.equal(gameFeat(cg), '퍼펙트게임'); assert.equal(gameFeat({ ...cg, walks: 2 }), '노히터'); assert.equal(gameFeat({ ...cg, hits: 3 }), '완봉승')
+  assert.equal(gameFeat({ ...cg, pulled: true }), null)
+  assert.deepEqual(recordGame(newSeason(), cg).feats, ['퍼펙트게임 (G1)'])
+  // Hall of fame + legacy archive
+  const career = Array.from({ length: 8 }, (_, i) => ({ ...ace, number: i + 1, year: i + 1, awards: i < 2 ? ['사이영상'] : [] }))
+  const hof = hallOfFame(career)
+  assert(hof.hallOfFame && hof.honors.some(h => h.includes('사이영상 2회')))
+  assert.equal(trophyCase(career).length, 2)
+  assert(!hallOfFame([{ ...newSeason(0, 1), games: 30, wins: 5, outs: 300 }]).hallOfFame)
+  const rec = buildRetired({ ...defaultProfile(), name: '레전드', age: 38, startAge: 19 }, [...career, { ...newSeason(4, 9), games: 0 }], 'VOLUNTARY')
+  assert.equal(rec.seasons.length, 8, 'empty seasons are dropped'); assert.equal(rec.peakTier, 4); assert(rec.hallOfFame)
+  assert.equal(legacyBonus([rec]), 120); assert.equal(legacyBonus(Array(20).fill(rec)), 400)
+  saveLegacy([rec]); assert.equal(loadLegacy()[0].name, '레전드')
+  memory.set(LEGACY_KEY, '{bad'); assert.deepEqual(loadLegacy(), [])
+}
+
 let fullSeason = newSeason()
 for (let id = 1; id <= 5; id++) fullSeason = recordGame(fullSeason, { ...g, id })
 assert.equal(fullSeason.games, 5); assert.equal(fullSeason.wins, 5)
 assert.equal(newSeason(4, 2).tier, 4); assert.equal(newSeason(4, 2).games, 0)
-console.log('Regression checks passed: physics, release meter & meatball, IVB/VAA/extension, tunneling, batter memory & mood, stamina & bullpen, physique trade-offs, tiers, saves/FIP/IP, save migration, chart mapping.')
+console.log('Regression checks passed: physics, release meter & meatball, IVB/VAA/extension, tunneling, batter memory & mood, stamina & bullpen, physique trade-offs, aging/retirement/legacy/awards, tiers, saves/FIP/IP, save migration, chart mapping.')

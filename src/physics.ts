@@ -1,3 +1,4 @@
+import { ageEffects } from './retirement'
 import { ARM_SLOTS, breakScale, clamp, dispersion, lerp, statSpeed, sweetSpot, type Grade, type PitchDefinition, type PitchStat, type PitcherProfile } from './game'
 
 /* ───────────────────────── Pitcher body ───────────────────────── */
@@ -128,12 +129,13 @@ export function createFlight(pitch: PitchDefinition, stat: PitchStat, profile: P
   // Fatigue: below 40 stamina the arm drags — velocity drops and command spreads.
   const tired = profile.stamina < 40 ? (40 - profile.stamina) / 40 * .45 : 0
   const overthrow = meter > .9 && meter <= 1 ? (meter - .9) * 1.8 : 0
-  const spread = dispersion(stat.controlLevel) * q.spreadMul * physiqueCost(profile.height).commandMul + tired * .4 + overthrow * .3
+  const aging = ageEffects(profile.age ?? 25)
+  const spread = dispersion(stat.controlLevel) * q.spreadMul * physiqueCost(profile.height).commandMul * aging.commandMul + tired * .4 + overthrow * .3
   const angle = Math.random() * Math.PI * 2
   const offset = spread * (.35 + Math.random() * .65)
   let movement = movementFor(pitch, stat, profile)
   let landing: { x: number; y: number }
-  let speed = statSpeed(pitch, stat) - (1 - power) * 8 - tired * 9
+  let speed = statSpeed(pitch, stat) - aging.veloLoss - (1 - power) * 8 - tired * 9
   if (q.meatball) {
     // Critical miss: the ball slips, loses its bite and drifts belt-high over the heart of the plate.
     movement = { x: movement.x * .35, y: movement.y * .35 }
@@ -157,7 +159,7 @@ export function createFlight(pitch: PitchDefinition, stat: PitchStat, profile: P
 }
 
 export function createPreviewFlight(pitch: PitchDefinition, stat: PitchStat, profile: PitcherProfile, target: { x: number; y: number }): PitchFlight {
-  const speed = statSpeed(pitch, stat)
+  const speed = Math.round((statSpeed(pitch, stat) - ageEffects(profile.age ?? 25).veloLoss) * 10) / 10
   const b = body(profile, speed), movement = movementFor(pitch, stat, profile), ivb = ivbCm(movement.y)
   return {
     pitch, speed, perceivedSpeed: b.perceivedSpeed, grade: 'PERFECT', duration: b.duration, target, landing: target,

@@ -44,6 +44,12 @@ export interface Season {
   year: number
   /** Starts on this club's schedule (a call-up only gets the rest of the year). */
   scheduled: number
+  /** Pitcher's age that season. */
+  age?: number
+  /** Single-game feats (perfect game, no-hitter, shutout) with the game number. */
+  feats?: string[]
+  /** League awards won for this season (decided when the season is archived). */
+  awards?: string[]
 }
 export const newSeason = (tier = 0, number = 1, year = number, scheduled = SEASON_GAMES): Season => ({ number, year, scheduled, tier, games: 0, wins: 0, losses: 0, saves: 0, outs: 0, runs: 0, hits: 0, walks: 0, hbp: 0, homeRuns: 0, strikeouts: 0, atBats: 0, pitches: 0, lastGameId: -1 })
 /** Fills fields added after v2 so old saves keep loading. */
@@ -57,10 +63,19 @@ export const gameWon = (g: GameState) => pitcherDecision(g) === 'W'
 export const gameSaved = (g: GameState) => gameWon(g) && !g.pulled && Boolean(g.saveOpp)
 /** Runs charged to our pitcher (the bullpen's runs are not his). */
 export const pitcherRuns = (g: GameState) => g.runsAgainst - (g.bullpenRuns ?? 0)
+/** Feats only count for a complete game the pitcher finished himself. */
+export function gameFeat(g: GameState): string | null {
+  if (!g.over || g.pulled || g.totalOuts < 27) return null
+  if (g.hits === 0 && g.walks === 0 && (g.hbp ?? 0) === 0 && g.runsAgainst === 0) return '퍼펙트게임'
+  if (g.hits === 0) return '노히터'
+  if (g.runsAgainst === 0) return '완봉승'
+  return null
+}
 export function recordGame(s: Season, g: GameState): Season {
   if (!g.over || g.id === s.lastGameId) return s
+  const feat = gameFeat(g)
   return {
-    ...s, games: s.games + 1, wins: s.wins + Number(gameWon(g)), losses: s.losses + Number(pitcherDecision(g) === 'L'), saves: s.saves + Number(gameSaved(g)),
+    ...s, feats: feat ? [...(s.feats ?? []), `${feat} (G${s.games + 1})`] : s.feats, games: s.games + 1, wins: s.wins + Number(gameWon(g)), losses: s.losses + Number(pitcherDecision(g) === 'L'), saves: s.saves + Number(gameSaved(g)),
     outs: s.outs + g.totalOuts, runs: s.runs + pitcherRuns(g), hits: s.hits + g.hits, walks: s.walks + g.walks, hbp: s.hbp + (g.hbp ?? 0),
     homeRuns: s.homeRuns + (g.homeRuns ?? 0), strikeouts: s.strikeouts + g.strikeouts, atBats: s.atBats + g.atBats, pitches: s.pitches + g.pitches, lastGameId: g.id,
   }
@@ -140,6 +155,45 @@ export function promotionStatus(s: Season): PromotionStatus {
 }
 /** Remaining starts after a call-up (at least five). */
 export const callUpSchedule = (s: Season) => Math.max(5, (s.scheduled ?? SEASON_GAMES) - s.games)
+
+/* ───────────────────────── League awards ───────────────────────── */
+
+interface AwardRule { name: string; test: (s: Season, era: number, fip: number) => boolean }
+const ip = (s: Season) => s.outs / 3
+/** Awards fitting each level, judged on the season's line (a full 30-start year ≈ 180 IP). */
+export const AWARDS: AwardRule[][] = [
+  [
+    { name: '아마추어 최우수 투수상', test: (s, era) => era <= 2.5 && ip(s) >= 100 && s.wins >= 10 },
+    { name: '아마추어 탈삼진왕', test: s => s.strikeouts >= 160 },
+  ],
+  [
+    { name: '퓨처스리그 우수 투수상', test: (s, era) => era <= 2.8 && ip(s) >= 100 && s.wins >= 10 },
+    { name: '퓨처스리그 탈삼진왕', test: s => s.strikeouts >= 150 },
+  ],
+  [
+    { name: 'KBO 투수 골든글러브', test: (s, era) => era <= 3 && ip(s) >= 150 && s.wins >= 14 },
+    { name: 'KBO 최고 투수상', test: (s, era, fip) => era <= 2.4 && fip <= 3 && ip(s) >= 160 && s.strikeouts >= 170 },
+    { name: 'KBO 탈삼진왕', test: s => s.strikeouts >= 190 },
+  ],
+  [
+    { name: '트리플A 올해의 투수', test: (s, era) => era <= 2.8 && ip(s) >= 130 },
+    { name: '트리플A 올스타', test: (s, era) => era <= 3.3 && ip(s) >= 80 },
+  ],
+  [
+    { name: '사이영상', test: (s, era, fip) => era <= 2.6 && fip <= 3 && ip(s) >= 170 && (s.wins >= 15 || s.strikeouts >= 220) },
+    { name: 'MLB 올스타', test: (s, era) => era <= 3.2 && ip(s) >= 90 },
+    { name: 'MLB 탈삼진왕', test: s => s.strikeouts >= 230 },
+  ],
+]
+export function seasonAwards(s: Season): string[] {
+  const rules = AWARDS[Math.max(0, Math.min(TIERS.length - 1, s.tier))]
+  const era = eraOf(s), fip = fipOf(s)
+  return rules.filter(r => r.test(s, era, fip)).map(r => r.name)
+}
+/** Every award and feat of a career, newest last, labelled with the season. */
+export function trophyCase(seasons: Season[]) {
+  return seasons.flatMap(s => [...(s.awards ?? []).map(a => ({ season: s.number, tier: s.tier, name: a, kind: 'award' as const })), ...(s.feats ?? []).map(f => ({ season: s.number, tier: s.tier, name: f, kind: 'feat' as const }))])
+}
 
 export function gameTeam(g: GameState) {
   const names = tierOf(g.tier).teams
