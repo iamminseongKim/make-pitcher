@@ -12,14 +12,10 @@ function Plaque({ p }: { p: RetiredPlayer }) {
     {p.hallOfFame && <span className="hof-badge"><Crown size={13} /> HALL OF FAME</span>}
     <h2>{p.name}</h2>
     <p>{p.height}cm · {p.hand === 'R' ? '우투' : '좌투'} · {ARM_SLOTS[p.armSlot].label} · {p.startAge}–{p.retiredAge}세 · {years}년 · 최고 {tierOf(p.peakTier).label}</p>
-    <div className="plaque-stats">
-      <div><small>W-L</small><b>{c.wins}-{c.losses}</b></div>
-      <div><small>SV</small><b>{c.saves}</b></div>
-      <div><small>IP</small><b>{formatIP(c.outs)}</b></div>
-      <div><small>ERA</small><b>{r.ERA}</b></div>
-      <div><small>FIP</small><b>{r.FIP}</b></div>
-      <div><small>SO</small><b>{c.strikeouts}</b></div>
-    </div>
+    <div className="table-scroll"><table className="stat-table plaque-table">
+      <thead><tr><th>W-L</th><th>SV</th><th>IP</th><th>ERA</th><th>FIP</th><th>SO</th></tr></thead>
+      <tbody><tr><td>{c.wins}-{c.losses}</td><td>{c.saves}</td><td>{formatIP(c.outs)}</td><td>{r.ERA}</td><td>{r.FIP}</td><td>{c.strikeouts}</td></tr></tbody>
+    </table></div>
     <p className="plaque-reason">{RETIRE_LABEL[p.reason]}{p.honors.length ? ` · ${p.honors.join(' · ')}` : ''}</p>
     <TrophyCase seasons={p.seasons} />
   </div>

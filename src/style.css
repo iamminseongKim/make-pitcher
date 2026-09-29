@@ -575,3 +575,25 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--cyan); outl
 @media (max-width: 430px) { .tp-pill { height: 28px; padding: 0 7px 0 5px } .tp-pill strong { font-size: 14px } }
 .special-tp { display: inline-block; margin: 0 0 10px !important; padding: 6px 12px; border-radius: 999px; background: #221a08; border: 1px solid var(--amber); color: var(--amber) !important; font-size: 13px !important; font-weight: 900 }
 .special-tp b { color: #fff }
+
+/* Stat tables (replace the tile boxes) */
+.stat-table { width: 100%; border-collapse: collapse; font-family: var(--display); background: var(--panel); border-radius: 10px; overflow: hidden }
+.stat-table th { padding: 7px 6px 5px; font-size: 12px; font-weight: 800; color: var(--muted); text-align: center; letter-spacing: .5px; background: #0b1424; border-bottom: 1px solid var(--line-2); white-space: nowrap }
+.stat-table td { padding: 8px 6px; font-size: 18px; font-weight: 800; text-align: center; white-space: nowrap }
+.stat-table th + th, .stat-table td + td { border-left: 1px solid var(--line) }
+.stat-table.advanced td { color: var(--cyan) }
+.stat-table:not(.advanced):not(.plaque-table) { min-width: 560px }
+.plaque-table { margin: 10px 0 8px; background: #0b1424cc }
+.plaque-table td { font-size: 16px }
+.info-table { width: 100%; border-collapse: collapse; margin: 0 0 10px; font-size: 12px; background: var(--panel); border-radius: 10px; overflow: hidden }
+.info-table th { width: 1%; padding: 7px 10px; color: var(--muted); font-weight: 700; text-align: left; white-space: nowrap; background: #0b1424 }
+.info-table td { padding: 7px 10px; font-weight: 800 }
+.info-table tr + tr th, .info-table tr + tr td { border-top: 1px solid var(--line) }
+
+.criteria-table { width: 100%; border-collapse: collapse; font-size: 13px; background: #0b1424; border-radius: 8px; overflow: hidden }
+.criteria-table th { padding: 6px 8px; font-size: 11px; font-weight: 700; color: var(--muted); text-align: left; border-bottom: 1px solid var(--line-2) }
+.criteria-table td { padding: 6px 8px; font-family: var(--display); font-size: 15px; font-weight: 800; border-top: 1px solid var(--line) }
+.criteria-table td:first-child { font-family: inherit; font-size: 12px; color: #c3cfe2 }
+.criteria-table td:nth-child(3) { color: var(--muted) }
+.criteria-table td:last-child { width: 1%; text-align: center; color: var(--dim) }
+.criteria-table tr.met td:nth-child(2), .criteria-table tr.met td:last-child { color: #7fe0a8 }

@@ -7,7 +7,8 @@ import { AWARDS, PROMOTION, TIERS, trophyCase, aggregate, formatIP, promotionSta
 type View = 'career' | number
 
 function Checklist({ items }: { items: Criterion[] }) {
-  return <ul className="criteria">{items.map(c => <li key={c.label} className={c.met ? 'met' : ''}><b>{c.met ? '✓' : '·'}</b><span>{c.label}</span><strong>{c.value}</strong><small>{c.goal}</small></li>)}</ul>
+  return <table className="criteria-table"><thead><tr><th>항목</th><th>현재</th><th>기준</th><th /></tr></thead>
+    <tbody>{items.map(c => <tr key={c.label} className={c.met ? 'met' : ''}><td>{c.label}</td><td>{c.value}</td><td>{c.goal}</td><td>{c.met ? '✓' : '—'}</td></tr>)}</tbody></table>
 }
 /** Promotion rules for the season in progress (season end + mid-season call-up + demotion line). */
 export function PromotionCard({ season, done }: { season: Season; done: boolean }) {
@@ -28,9 +29,9 @@ export function StatGrid({ s }: { s: Season }) {
   const advanced: [string, string | number, string][] = [['FIP', r.FIP, '수비 무관 평균자책'], ['K/9', r['K/9'], '9이닝당 삼진'], ['BB/9', r['BB/9'], '9이닝당 볼넷'], ['K/BB', r['K/BB'], '삼진/볼넷'], ['BAA', r.BAA, '피안타율']]
   return <>
     <h3 className="stat-heading">Traditional</h3>
-    <div className="stat-grid">{traditional.map(([k, v]) => <div key={k}><small>{k}</small><strong>{v}</strong></div>)}</div>
+    <div className="table-scroll"><table className="stat-table"><thead><tr>{traditional.map(([k]) => <th key={k}>{k}</th>)}</tr></thead><tbody><tr>{traditional.map(([k, v]) => <td key={k}>{v}</td>)}</tr></tbody></table></div>
     <h3 className="stat-heading">Advanced</h3>
-    <div className="stat-grid advanced">{advanced.map(([k, v, hint]) => <div key={k} title={hint}><small>{k}</small><strong>{v}</strong><span>{hint}</span></div>)}</div>
+    <div className="table-scroll"><table className="stat-table advanced"><thead><tr>{advanced.map(([k, , hint]) => <th key={k} title={hint}>{k}</th>)}</tr></thead><tbody><tr>{advanced.map(([k, v, hint]) => <td key={k} title={hint}>{v}</td>)}</tr></tbody></table></div>
   </>
 }
 
@@ -78,12 +79,12 @@ export function CareerHub({ profile, history, current, onClose, onEdit, onLegacy
         <div className="career-badge"><span>{service.label}</span></div>
         <h1>{profile.name}</h1>
         <p>{profile.height}cm · {profile.hand === 'R' ? '우투' : '좌투'} · {ARM_SLOTS[profile.armSlot].label} · 익스텐션 {extensionOf(profile).toFixed(2)}m · 릴리스 {releaseHeightOf(profile).toFixed(2)}m</p>
-        <div className="career-meta">
-          <div><small>현재 리그</small><b>{tierOf(current.tier).label}</b></div>
-          <div><small>데뷔</small><b>{debut ? `S${debut.number} · ${tierOf(debut.tier).short}` : '아마추어'}</b></div>
-          <div><small>프로 연차</small><b>{service.proYears}년</b></div>
-          <div><small>나이</small><b>{profile.age}세 · {ageStage(profile.age)}</b></div>
-        </div>
+        <table className="info-table"><tbody>
+          <tr><th>현재 리그</th><td>{tierOf(current.tier).label}</td></tr>
+          <tr><th>데뷔</th><td>{debut ? `시즌 ${debut.number} · ${tierOf(debut.tier).label}` : '아마추어 (프로 데뷔 전)'}</td></tr>
+          <tr><th>프로 연차</th><td>{service.proYears}년</td></tr>
+          <tr><th>나이</th><td>{profile.age}세 · {ageStage(profile.age)}</td></tr>
+        </tbody></table>
         <div className="career-actions">
           <button className="ghost-button" onClick={onEdit}><Pencil size={14} /> 프로필 수정</button>
           <button className="ghost-button" onClick={onLegacy}><Landmark size={14} /> 역대 선수{legacyCount ? ` ${legacyCount}` : ''}</button>
