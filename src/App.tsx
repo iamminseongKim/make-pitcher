@@ -1,9 +1,12 @@
+import { sfx, disposeAudio } from './audio'
+import { TIERS, SEASON_GAMES, newSeason, recordGame, seasonRates, gameTeam } from './season'
+import { PitchChart } from './PitchChart'
 import { useEffect, useRef, useState, type CSSProperties, type PointerEvent } from 'react'
 import { Activity, ArrowLeft, ArrowRight, Check, CircleHelp, Crosshair, Flame, Hand, LockKeyhole, RotateCcw, Settings2, Sparkles, Volume2, VolumeX, Zap } from 'lucide-react'
 import {
-  ARM_SLOTS, DIFFICULTIES, LEAGUE_TIERS, PITCHES, SAVE_KEY, STARTER_LEVELS, TEAMS, WEAK_LABEL, ZONE_LABEL,
+  ARM_SLOTS, DIFFICULTIES, PITCHES, SAVE_KEY, STARTER_LEVELS, WEAK_LABEL, ZONE_LABEL,
   applyOutcome, batterMindset, batterSide, breakScale, clamp, closeInning, createFlight, createPreviewFlight, defaultCareer, defaultProfile,
-  leagueTier, loadSave, masteryLevel, newGame, pitchById, pitcherLevel, resolvePitch, statSpeed, sweetSpot, tunnelScore, upgradeCost, zoneHeat,
+  loadSave, masteryLevel, newGame, pitchById, pitcherLevel, resolvePitch, statSpeed, sweetSpot, tunnelScore, upgradeCost, zoneHeat,
   type ArmSlot, type Call, type CareerStats, type Difficulty, type GameState, type Hand as ThrowHand, type InningSummary, type PitchFlight,
   type PitchLog, type PitchResult, type PitcherProfile, type PitchType, type StatKey,
 } from './game'
@@ -20,40 +23,6 @@ const LABELS: Record<StatKey, { label: string; hint: string }> = {
 }
 
 /* ───────────── Sound ───────────── */
-let audio: AudioContext | null = null
-function tone(freq: number, dur: number, type: OscillatorType, vol: number, slideTo?: number, delay = 0) {
-  audio ??= new AudioContext()
-  const t = audio.currentTime + delay
-  const osc = audio.createOscillator(), gain = audio.createGain()
-  osc.type = type; osc.frequency.setValueAtTime(freq, t)
-  if (slideTo) osc.frequency.exponentialRampToValueAtTime(slideTo, t + dur)
-  gain.gain.setValueAtTime(.0001, t); gain.gain.exponentialRampToValueAtTime(vol, t + .01); gain.gain.exponentialRampToValueAtTime(.0001, t + dur)
-  osc.connect(gain); gain.connect(audio.destination); osc.start(t); osc.stop(t + dur + .02)
-}
-function noise(dur: number, vol: number, delay = 0) {
-  audio ??= new AudioContext()
-  const t = audio.currentTime + delay
-  const buf = audio.createBuffer(1, Math.floor(audio.sampleRate * dur), audio.sampleRate)
-  const d = buf.getChannelData(0); for (let i = 0; i < d.length; i++) d[i] = (Math.random() * 2 - 1) * (1 - i / d.length)
-  const src = audio.createBufferSource(), gain = audio.createGain(), filter = audio.createBiquadFilter()
-  filter.type = 'bandpass'; filter.frequency.value = 900; src.buffer = buf
-  gain.gain.value = vol; src.connect(filter); filter.connect(gain); gain.connect(audio.destination); src.start(t)
-}
-type Sfx = 'release' | 'mitt' | 'pop' | 'bat' | 'crack' | 'whiff' | 'cheer' | 'ui' | 'k'
-function sfx(kind: Sfx, on: boolean, speed = 140) {
-  if (!on) return
-  try {
-    if (kind === 'release') tone(220 + speed * 2, .22, 'sawtooth', .025, 100 + speed)
-    if (kind === 'mitt') { tone(95, .09, 'square', .1, 45); noise(.05, .25) }
-    if (kind === 'pop') { tone(150, .07, 'square', .14, 50); noise(.06, .45) }
-    if (kind === 'whiff') noise(.18, .12)
-    if (kind === 'bat') { tone(420, .06, 'triangle', .12, 180); noise(.05, .3) }
-    if (kind === 'crack') { tone(900, .05, 'square', .12, 300); noise(.09, .7) }
-    if (kind === 'cheer') { for (let i = 0; i < 6; i++) noise(.5, .06, i * .08) }
-    if (kind === 'k') { tone(660, .09, 'triangle', .07); tone(880, .12, 'triangle', .07, undefined, .09) }
-    if (kind === 'ui') tone(540, .05, 'triangle', .05)
-  } catch { /* Audio is optional. */ }
-}
 
 function Creator({ initialProfile, onSave, editing, onClose }: { initialProfile: PitcherProfile; onSave: (p: PitcherProfile) => void; editing: boolean; onClose?: () => void }) {
   const [name, setName] = useState(initialProfile.name === 'ROOKIE' && !editing ? '' : initialProfile.name)
@@ -111,6 +80,7 @@ function Bases({ bases }: { bases: [boolean, boolean, boolean] }) {
 function App() {
   const [profile, setProfile] = useState<PitcherProfile>(initial.profile)
   const [game, setGame] = useState<GameState>(initial.game)
+  const [season, setSeason] = useState(initial.season)
   const [career, setCareer] = useState<CareerStats>(initial.career)
   const [selected, setSelected] = useState<PitchType>(PITCHES.find(p => initial.profile.arsenal[p.id].unlocked)?.id ?? 'FOUR_SEAM')
   const [target, setTarget] = useState({ x: .45, y: .45 })
@@ -122,7 +92,7 @@ function App() {
   const [showZone, setShowZone] = useState(true)
   const [scout, setScout] = useState(false)
   const [resetArmed, setResetArmed] = useState(false)
-  const [summary, setSummary] = useState<InningSummary | null>(null)
+  const [summary, setSummary] = useState<InningSummary | null>(initial.game.over ? { inning: initial.game.inning, allowed: 0, ours: 0, clean: false, finished: initial.game.runsFor > initial.game.runsAgainst ? 'WIN' : initial.game.runsFor < initial.game.runsAgainst ? 'LOSS' : 'TIE' } : null)
   const [tpPop, setTpPop] = useState<{ n: number; key: number } | null>(null)
   const [shake, setShake] = useState(0)
 
@@ -148,19 +118,25 @@ function App() {
   const stat = profile.arsenal[selected]
   const batter = game.lineup[game.batterIndex]
   const side = batterSide(batter, profile.hand)
-  const team = TEAMS[game.opponent]
-  const tier = leagueTier(career.wins)
+  const team = gameTeam(game)
+  const tier = season.tier
+  const seasonView = recordGame(season, game)
+  const seasonDone = seasonView.games >= SEASON_GAMES
   const preview = profile.created && stat.unlocked ? createPreviewFlight(pitch, stat, profile, target) : null
   const tunnel = preview ? tunnelScore(preview, lastFlightRef.current) : 0
   const fastest = Math.max(...PITCHES.filter(p => profile.arsenal[p.id].unlocked && p.family === 'FASTBALL').map(p => statSpeed(p, profile.arsenal[p.id])), 125)
 
   sceneRef.current = {
-    profile, batterSide: side, teamColor: team.color, target, flight: null, previousFlight: lastFlightRef.current, previewFlight: preview,
+    profile, strikeoutChance: game.strikes === 2, batterSide: side, teamColor: team.color, target, flight: null, previousFlight: lastFlightRef.current, previewFlight: preview,
     tunnel, flightProgress: 0, showZone, heat: scout ? zoneHeat(batter, side) : null, log: logOverrideRef.current ?? game.abLog,
     anim: animRef.current, batted: battedRef.current, result: resultRef.current, now: 0,
   }
 
-  useEffect(() => { try { localStorage.setItem(SAVE_KEY, JSON.stringify({ profile, game, career })) } catch { /* storage optional */ } }, [profile, game, career])
+  useEffect(() => { try { localStorage.setItem(SAVE_KEY, JSON.stringify({ profile, game, career, season })) } catch { /* storage optional */ } }, [profile, game, career, season])
+
+  const timers = useRef(new Set<number>())
+  const later = (fn: () => void, ms: number) => { const id = window.setTimeout(() => { timers.current.delete(id); fn() }, ms); timers.current.add(id) }
+  useEffect(() => () => { timers.current.forEach(clearTimeout); timers.current.clear(); disposeAudio() }, [])
 
   function finishPitch(f: PitchFlight) {
     const r = pendingRef.current!
@@ -183,7 +159,7 @@ function App() {
     if (!r.swing) animRef.current = { ...animRef.current, kind: o === 'HIT_BY_PITCH' ? 'hbp' : 'take', at: performance.now() }
 
     const tag = r.tags.filter(t => !call.text.includes(t)).slice(0, 2).join(' · ')
-    resultRef.current = { text: call.text.split(' · ')[0], tone: call.tone, at: performance.now() }
+    resultRef.current = { text: ev.strikeout && o === 'SWINGING_STRIKE' ? 'STRIKE THREE!' : o === 'SWINGING_STRIKE' ? (r.tags.includes('유인구') ? 'CHASE!' : 'SWING & MISS') : r.tags.includes('코너 꽉 찬 공') ? 'PAINTED THE CORNER' : call.text.split(' · ')[0], tone: call.tone, at: performance.now() }
     setCallout({ main: call.text, sub: [tag, `${f.pitch.short} ${f.speed.toFixed(0)}km`].filter(Boolean).join(' · '), tone: call.tone })
     playOutcome(call, o, f)
     if (reward) setTpPop({ n: reward, key: performance.now() })
@@ -199,15 +175,15 @@ function App() {
     setPhase('result')
     if (ev.inningOver) {
       const closed = closeInning(next)
-      setGame(next)
-      window.setTimeout(() => {
+      setGame(closed.game)
+      setCareer(c => ({ ...c, innings: c.innings + 1 }))
+      later(() => {
         setSummary(closed.summary)
         setGame(closed.game)
-        setCareer(c => ({ ...c, innings: c.innings + 1 }))
       }, 1250)
     } else {
       setGame(next)
-      window.setTimeout(() => { logOverrideRef.current = null; animRef.current = { kind: 'idle', at: 0, contact: false, barrel: { x: 0, y: 0 } }; setPhase('ready') }, ev.paEnded ? 1250 : 650)
+      later(() => { logOverrideRef.current = null; animRef.current = { kind: 'idle', at: 0, contact: false, barrel: { x: 0, y: 0 } }; setPhase('ready') }, ev.paEnded ? 1250 : 650)
     }
   }
   finishRef.current = finishPitch
@@ -240,7 +216,9 @@ function App() {
       if (gaugeNeedleRef.current) gaugeNeedleRef.current.style.left = `${power * 100}%`
       if (started !== null && elapsed >= 2) launchRef.current(0)
       const f = flightRef.current
-      const t = f ? clamp((now - f.startedAt) / f.duration, 0, 1) : 0
+      const raw = f ? (now - f.startedAt) / f.duration : 0
+      const cinematic = !window.matchMedia('(prefers-reduced-motion: reduce)').matches && pendingRef.current?.outcome === 'SWINGING_STRIKE' && sceneRef.current?.strikeoutChance
+      const t = clamp(cinematic && raw > .7 ? .7 + (raw - .7) * .35 : raw, 0, 1)
       const scene = sceneRef.current
       if (scene) renderScene(ctx, { ...scene, flight: f, flightProgress: t, anim: animRef.current, batted: battedRef.current, result: resultRef.current, log: logOverrideRef.current ?? scene.log, now })
       if (f && t >= 1) finishRef.current(f)
@@ -250,19 +228,20 @@ function App() {
     return () => cancelAnimationFrame(raf)
   }, [])
 
-  const canPitch = profile.created && panel === 'none' && !summary && stat.unlocked && (phase === 'ready' || phase === 'charging')
+  const canPitch = profile.created && !game.over && panel === 'none' && !summary && stat.unlocked && (phase === 'ready' || phase === 'charging')
   const launch = (power: number) => {
     if (meterStartedAtRef.current === null || flightRef.current) return
     meterStartedAtRef.current = null
     const f = createFlight(pitch, stat, profile, target, power)
     const r = resolvePitch(f, {
       batter, pitcherHand: profile.hand, balls: game.balls, strikes: game.strikes, inning: game.inning, difficulty: profile.difficulty,
-      previous: lastFlightRef.current, seenSpeeds: seenRef.current.speeds, seenTypes: seenRef.current.types, fastest,
+      previous: lastFlightRef.current, seenSpeeds: seenRef.current.speeds, seenTypes: seenRef.current.types, fastest, tier: game.tier, history: game.abLog,
     })
     pendingRef.current = r
     logOverrideRef.current = null
     battedRef.current = null
-    animRef.current = r.swing ? { kind: 'swing', at: f.startedAt + f.duration, contact: !['SWINGING_STRIKE'].includes(r.outcome), barrel: r.barrel } : { kind: 'idle', at: 0, contact: false, barrel: r.barrel }
+    const slowK = r.outcome === 'SWINGING_STRIKE' && game.strikes === 2 && !window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    animRef.current = r.swing ? { kind: 'swing', at: f.startedAt + f.duration * (slowK ? .7 + .3 / .35 : 1), contact: !['SWINGING_STRIKE'].includes(r.outcome), barrel: r.barrel } : { kind: 'idle', at: 0, contact: false, barrel: r.barrel }
     flightRef.current = f
     setPhase('flying')
     setCallout({ main: f.grade, sub: `${pitch.short} ${f.speed.toFixed(1)} km/h`, tone: f.grade === 'PERFECT' ? 'perfect' : f.grade === 'GOOD' ? 'good' : 'miss' })
@@ -278,7 +257,7 @@ function App() {
     else launch(gaugeRef.current)
   }
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.code === 'Space' && !(e.target instanceof HTMLInputElement)) { e.preventDefault(); tapMeter() } }
+    const onKey = (e: KeyboardEvent) => { if (e.code === 'Space' && !e.repeat && !(e.target instanceof HTMLElement && (e.target.matches('input, button, select, textarea') || e.target.isContentEditable))) { e.preventDefault(); tapMeter() } }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   })
@@ -303,14 +282,16 @@ function App() {
     setProfile(prev => ({ ...prev, trainingPoints: prev.trainingPoints - def.unlockCost, arsenal: { ...prev.arsenal, [trainingPitch]: { ...prev.arsenal[trainingPitch], unlocked: true } } }))
     setSelected(trainingPitch); sfx('k', soundOn)
   }
-  const continueGame = () => {
+  const continueGame = (promote = false) => {
     if (!summary) return
     if (summary.finished) {
       const win = summary.finished === 'WIN', loss = summary.finished === 'LOSS'
       const bonus = Math.round((win ? 150 : loss ? 40 : 70) * DIFFICULTIES[profile.difficulty].tpMultiplier)
       setCareer(c => ({ ...c, games: c.games + 1, wins: c.wins + (win ? 1 : 0), losses: c.losses + (loss ? 1 : 0) }))
       setProfile(p => ({ ...p, trainingPoints: p.trainingPoints + bonus, stamina: 100 }))
-      setGame(g => newGame(g, profile.difficulty, leagueTier(career.wins + (win ? 1 : 0))))
+      const nextSeason = seasonDone ? newSeason(promote ? Math.min(4, season.tier + 1) : season.tier, season.number + 1) : seasonView
+      setSeason(nextSeason)
+      setGame(g => newGame(g, profile.difficulty, nextSeason.tier))
     }
     lastFlightRef.current = null; seenRef.current = { speeds: [], types: [] }; logOverrideRef.current = null
     animRef.current = { kind: 'idle', at: 0, contact: false, barrel: { x: 0, y: 0 } }
@@ -327,7 +308,7 @@ function App() {
   return <div className="app-shell">
     <main className={`game-shell shake-${shake % 2}`}>
       <header className="app-header">
-        <div className="brand"><div className="brand-mark">A</div><div><strong>ACE PROJECT</strong><small>{LEAGUE_TIERS[tier]} · {career.wins}승 {career.losses}패</small></div></div>
+        <div className="brand"><div className="brand-mark">A</div><div><strong>ACE PROJECT</strong><small>{TIERS[tier].label} · S{season.number} G{Math.min(SEASON_GAMES, season.games + 1)}/{SEASON_GAMES} · {career.wins}승 {career.losses}패</small></div></div>
         <div className="header-actions">
           <div className="tp-pill"><Zap size={13} fill="currentColor" /><strong>{profile.trainingPoints.toLocaleString()}</strong>{tpPop && <em key={tpPop.key} className="tp-pop">+{tpPop.n}</em>}</div>
           <button className="icon-button train" onClick={() => { setTrainingPitch(selected); openPanel('training') }} aria-label="훈련실"><Activity size={17} /></button>
@@ -393,7 +374,7 @@ function App() {
       </section>
     </main>
 
-    {summary && <div className="overlay"><section className="sheet inning-sheet">
+    {summary && panel === 'none' && <div className="overlay"><section className="sheet inning-sheet" role="dialog" aria-modal="true" aria-label={seasonDone ? "Season Summary" : summary.finished ? "Game Summary" : "Inning Summary"}>
       <span className="eyebrow">{summary.finished ? 'FINAL' : `${summary.inning}회 종료`}</span>
       <h1>{summary.finished === 'WIN' ? '승리!' : summary.finished === 'LOSS' ? '패전…' : summary.finished === 'TIE' ? '무승부' : summary.allowed === 0 ? (summary.clean ? '삼자범퇴' : '무실점') : `${summary.allowed}실점`}</h1>
       <table className="linescore"><thead><tr><th />{game.lineScore.slice(0, summary.inning).map((_, i) => <th key={i}>{i + 1}</th>)}<th>R</th></tr></thead>
@@ -401,7 +382,9 @@ function App() {
           <tr><td>ACE</td>{game.lineScore.slice(0, summary.inning).map((_, i) => <td key={i}>{summary.finished === 'WIN' && summary.ours === 0 && i === summary.inning - 1 && summary.inning >= 9 ? 'X' : game.ourScore[i] ?? ''}</td>)}<td><b>{game.runsFor}</b></td></tr></tbody></table>
       {!summary.finished && <p className="inning-note">{summary.ours ? `우리 타선 ${summary.ours}점 지원!` : '우리 타선 침묵.'}{summary.clean ? '  클린 이닝 보너스 +TP' : ''}</p>}
       {summary.finished && <p className="inning-note">{game.strikeouts}K · {game.hits}피안타 · {game.walks}볼넷 · {game.pitches}구</p>}
-      <button className="primary-button" onClick={continueGame}>{summary.finished ? '다음 경기' : `${summary.inning + 1}회 초 등판`} <ArrowRight size={18} /></button>
+      {summary.finished && <><PitchChart pitches={game.pitchLog} /><div className="season-stats">{Object.entries(seasonRates(seasonView)).map(([k, v]) => <div key={k}><small>{k}</small><strong>{v}</strong></div>)}</div><p>Season {season.number} · {seasonView.games}/{SEASON_GAMES} games · {seasonView.wins}W–{seasonView.losses}L</p>{seasonDone && <div className="season-summary"><h2>Season Summary</h2><p>{TIERS[tier].label} 시즌 완료. 다음 무대에 도전하거나 현재 리그를 반복하세요.</p>{tier < 4 && <button className="primary-button" onClick={() => continueGame(true)}>Attempt Promotion → {TIERS[tier + 1].label}</button>}</div>}</>}
+      <button className="primary-button" onClick={() => continueGame()}>{summary.finished ? (seasonDone ? 'Repeat Current Tier' : 'Play Next Game') : `${summary.inning + 1}회 초 등판`} <ArrowRight size={18} /></button>
+      {summary.finished && <button className="secondary-button" onClick={() => openPanel('training')}>Upgrade Pitch Arsenal</button>}
     </section></div>}
 
     {!profile.created && <Creator initialProfile={profile} onSave={p => { setProfile(p); const first = PITCHES.find(def => p.arsenal[def.id].unlocked)!.id; setSelected(first); setTrainingPitch(first); setGame(newGame(undefined, p.difficulty)) }} editing={false} />}
@@ -433,7 +416,7 @@ function App() {
       <div className="help-options">
         <button onClick={() => setShowZone(!showZone)}><Settings2 size={16} /> 스트라이크 존 선 <span>{showZone ? 'ON' : 'OFF'}</span></button>
         <button className={resetArmed ? 'reset-confirm' : ''} onClick={() => {
-          if (resetArmed) { flightRef.current = null; lastFlightRef.current = null; meterStartedAtRef.current = null; pendingRef.current = null; setPhase('ready'); setProfile(defaultProfile()); setGame(newGame()); setCareer(defaultCareer()); setSelected('FOUR_SEAM'); setResetArmed(false); setPanel('none') } else setResetArmed(true)
+          if (resetArmed) { timers.current.forEach(clearTimeout); timers.current.clear(); setSeason(newSeason()); setSummary(null); logOverrideRef.current = null; seenRef.current = { speeds: [], types: [] }; battedRef.current = null; resultRef.current = { text: '', tone: '', at: 0 }; flightRef.current = null; lastFlightRef.current = null; meterStartedAtRef.current = null; pendingRef.current = null; setPhase('ready'); setProfile(defaultProfile()); setGame(newGame()); setCareer(defaultCareer()); setSelected('FOUR_SEAM'); setResetArmed(false); setPanel('none') } else setResetArmed(true)
         }}><RotateCcw size={16} /> {resetArmed ? '한 번 더 누르면 기록 삭제' : '새 선수로 시작'} <span>{resetArmed ? '확인' : 'RESET'}</span></button>
       </div>
       <button className="primary-button" onClick={() => { setResetArmed(false); setPanel('none') }}>마운드로 <Check size={18} /></button>

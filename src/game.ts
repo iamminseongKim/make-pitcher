@@ -1,3 +1,7 @@
+import { decisionPoint, movementProgress, tunnelScore, type PitchFlight } from './physics'
+export { createFlight, createPreviewFlight, pointOnFlight, decisionPoint, perceivedLanding, tunnelScore } from './physics'
+export type { PitchFlight } from './physics'
+import { TIERS, newSeason, type Season } from './season'
 export type PitchType = 'FOUR_SEAM' | 'SINKER' | 'CUTTER' | 'SPLITTER' | 'CHANGEUP' | 'SLIDER' | 'CURVE' | 'SWEEPER'
 export type StatKey = 'velocityLevel' | 'controlLevel' | 'breakLevel'
 export type Hand = 'R' | 'L'
@@ -57,12 +61,12 @@ export interface PitchDefinition {
 
 // moveX: + is glove side, - is arm side (sign is flipped for lefties). moveY: - is up, + is down.
 export const PITCHES: PitchDefinition[] = [
-  { id: 'FOUR_SEAM', name: '포심 패스트볼', short: '포심', family: 'FASTBALL', minSpeed: 130, maxSpeed: 170, moveX: -8, moveY: -45, late: .55, color: '#5fe6ff', unlockCost: 125, description: '높게 던지면 떠오르듯 배트 위로 지나갑니다' },
-  { id: 'SINKER', name: '싱커', short: '싱커', family: 'FASTBALL', minSpeed: 128, maxSpeed: 166, moveX: -30, moveY: 32, late: .72, color: '#72eac1', unlockCost: 115, description: '같은 손 타자 몸쪽으로 파고들어 땅볼 유도' },
+  { id: 'FOUR_SEAM', name: '포심 패스트볼', short: '포심', family: 'FASTBALL', minSpeed: 130, maxSpeed: 170, moveX: -8, moveY: -45, late: .55, color: '#e63b58', unlockCost: 125, description: '높게 던지면 떠오르듯 배트 위로 지나갑니다' },
+  { id: 'SINKER', name: '싱커', short: '싱커', family: 'FASTBALL', minSpeed: 128, maxSpeed: 166, moveX: -30, moveY: 32, late: .72, color: '#ff9d16', unlockCost: 115, description: '같은 손 타자 몸쪽으로 파고들어 땅볼 유도' },
   { id: 'CUTTER', name: '커터', short: '커터', family: 'FASTBALL', minSpeed: 124, maxSpeed: 163, moveX: 30, moveY: 8, late: .82, color: '#b0a7ff', unlockCost: 135, description: '반대 손 타자 몸쪽으로 꺾여 배트 손잡이에 맞습니다' },
   { id: 'SPLITTER', name: '스플리터', short: '스플리터', family: 'OFFSPEED', minSpeed: 118, maxSpeed: 154, moveX: -4, moveY: 52, late: .85, color: '#ffb974', unlockCost: 145, description: '직구처럼 오다 바닥으로 사라지는 결정구' },
-  { id: 'CHANGEUP', name: '체인지업', short: '체인지업', family: 'OFFSPEED', minSpeed: 112, maxSpeed: 145, moveX: -31, moveY: 28, late: .62, color: '#f7cf83', unlockCost: 125, description: '반대 손 타자 바깥으로 흘러나가며 타이밍 강탈' },
-  { id: 'SLIDER', name: '슬라이더', short: '슬라이더', family: 'BREAKING', minSpeed: 115, maxSpeed: 152, moveX: 40, moveY: 22, late: .76, color: '#d096ff', unlockCost: 145, description: '같은 손 타자 바깥으로 도망가는 헛스윙 유도구' },
+  { id: 'CHANGEUP', name: '체인지업', short: '체인지업', family: 'OFFSPEED', minSpeed: 112, maxSpeed: 145, moveX: -31, moveY: 28, late: .62, color: '#31bf64', unlockCost: 125, description: '반대 손 타자 바깥으로 흘러나가며 타이밍 강탈' },
+  { id: 'SLIDER', name: '슬라이더', short: '슬라이더', family: 'BREAKING', minSpeed: 115, maxSpeed: 152, moveX: 40, moveY: 22, late: .76, color: '#e3d52a', unlockCost: 145, description: '같은 손 타자 바깥으로 도망가는 헛스윙 유도구' },
   { id: 'CURVE', name: '커브', short: '커브', family: 'BREAKING', minSpeed: 100, maxSpeed: 138, moveX: 10, moveY: 65, late: .54, color: '#ff8aaa', unlockCost: 165, description: '하이 패스트볼 다음에 던지면 눈높이가 무너집니다' },
   { id: 'SWEEPER', name: '스위퍼', short: '스위퍼', family: 'BREAKING', minSpeed: 110, maxSpeed: 144, moveX: 58, moveY: 8, late: .70, color: '#88b9ff', unlockCost: 210, description: '존을 가로지르는 극단적인 횡변화' },
 ]
@@ -75,7 +79,6 @@ export const ARM_SLOTS: Record<ArmSlot, { label: string; angle: string; releaseY
   SUBMARINE: { label: '언더핸드', angle: '8시 / 4시', releaseY: .12, width: .46 },
 }
 
-const smooth = (t: number) => t * t * (3 - 2 * t)
 export const clamp = (n: number, min: number, max: number) => Math.max(min, Math.min(max, n))
 export const lerp = (a: number, b: number, t: number) => a + (b - a) * t
 const gauss = () => { let u = 0, v = 0; while (!u) u = Math.random(); while (!v) v = Math.random(); return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v) }
@@ -177,6 +180,10 @@ export function zoneHeat(b: Batter, side: Hand): number[][] {
 export interface PitchLog { pitch: PitchType; speed: number; x: number; y: number; px: number; py: number; call: string; tag: string }
 export interface GameState {
   id: number
+  tier: number
+  pitchLog: PitchLog[]
+  totalOuts: number
+  atBats: number
   opponent: number
   lineup: Batter[]
   batterIndex: number
@@ -199,13 +206,12 @@ export interface GameState {
   over: boolean
 }
 
-export const LEAGUE_TIERS = ['퓨처스리그', '1군 데뷔', '주전 로테이션', '올스타', '월드 클래스']
-export const leagueTier = (wins: number) => Math.min(LEAGUE_TIERS.length - 1, Math.floor(wins / 3))
 export function newGame(prev?: GameState, difficulty: Difficulty = 'PRO', tier = 0): GameState {
   const opponent = prev ? (prev.opponent + 1 + Math.floor(Math.random() * (TEAMS.length - 1))) % TEAMS.length : Math.floor(Math.random() * TEAMS.length)
-  const strength = (difficulty === 'LEGEND' ? .06 : difficulty === 'ROOKIE' ? -.06 : 0) + tier * .035
+  tier = clamp(Math.floor(tier), 0, TIERS.length - 1)
+  const strength = (difficulty === 'LEGEND' ? .06 : difficulty === 'ROOKIE' ? -.06 : 0) + TIERS[tier].strength
   return {
-    id: (prev?.id ?? 0) + 1, opponent, lineup: makeLineup(strength), batterIndex: 0,
+    id: (prev?.id ?? 0) + 1, tier, pitchLog: [], totalOuts: 0, atBats: 0, opponent, lineup: makeLineup(strength).map((b, i) => ({ ...b, name: tier < 3 ? b.name : ['James Carter', 'Luis Rivera', 'Marcus Reed', 'Diego Santos', 'Alex Brooks', 'Kenji Mori', 'Carlos Vega', 'Ryan Hayes', 'Evan Cole'][i] })), batterIndex: 0,
     inning: 1, outs: 0, balls: 0, strikes: 0, bases: [false, false, false], runsAgainst: 0, runsFor: 0,
     lineScore: [0], ourScore: [], inningHits: 0, inningWalks: 0, pitches: 0, strikeouts: 0, hits: 0, walks: 0, abLog: [], over: false,
   }
@@ -220,7 +226,7 @@ export function defaultProfile(): PitcherProfile {
 export const defaultCareer = (): CareerStats => ({ wins: 0, losses: 0, strikeouts: 0, innings: 0, runs: 0, games: 0 })
 
 export const SAVE_KEY = 'ace-project-save-v2'
-export function loadSave(): { profile: PitcherProfile; game: GameState; career: CareerStats } {
+export function loadSave(): { profile: PitcherProfile; game: GameState; career: CareerStats; season: Season } {
   const base = defaultProfile()
   try {
     const raw = localStorage.getItem(SAVE_KEY) ?? localStorage.getItem('ace-project-save-v1')
@@ -231,106 +237,12 @@ export function loadSave(): { profile: PitcherProfile; game: GameState; career: 
       arsenal: Object.fromEntries(PITCHES.map(p => [p.id, { ...base.arsenal[p.id], ...parsed.profile.arsenal[p.id] }])) as Record<PitchType, PitchStat>,
     }
     const game: GameState = parsed.game?.lineup?.length === 9 ? { ...newGame(undefined, profile.difficulty), ...parsed.game } : newGame(undefined, profile.difficulty)
-    return { profile, game, career: { ...defaultCareer(), ...parsed.career } }
+    game.totalOuts = parsed.game?.totalOuts ?? ((game.over ? game.inning : game.inning - 1) * 3 + game.outs)
+    game.atBats = parsed.game?.atBats ?? game.totalOuts + game.hits
+    return { profile, game, season: { ...newSeason(), ...parsed.season, tier: clamp(Math.floor(parsed.season?.tier ?? 0), 0, 4) }, career: { ...defaultCareer(), ...parsed.career } }
   } catch {
-    return { profile: base, game: newGame(), career: defaultCareer() }
+    return { profile: base, game: newGame(), career: defaultCareer(), season: newSeason() }
   }
-}
-
-/* ───────────────────────── Flight model ───────────────────────── */
-
-export interface PitchFlight {
-  pitch: PitchDefinition
-  speed: number
-  grade: Grade
-  duration: number
-  target: { x: number; y: number }
-  landing: { x: number; y: number }
-  release: { x: number; y: number }
-  movement: { x: number; y: number }
-  startedAt: number
-  control: number
-  breakLevel: number
-  power: number
-}
-
-function releasePoint(profile: PitcherProfile) {
-  // Catcher view: a right-hander's arm is on the left side of the screen.
-  const side = profile.hand === 'R' ? 1 : -1
-  const slot = ARM_SLOTS[profile.armSlot]
-  return { x: -side * slot.width, y: slot.releaseY - (profile.height - 185) / 90 }
-}
-function movementFor(pitch: PitchDefinition, stat: PitchStat, profile: PitcherProfile) {
-  const side = profile.hand === 'R' ? 1 : -1
-  const scale = breakScale(stat.breakLevel)
-  // Lower arm slots trade vertical drop for horizontal run.
-  const flat = profile.armSlot === 'SIDEARM' ? .25 : profile.armSlot === 'SUBMARINE' ? .4 : profile.armSlot === 'OVERHAND' ? -.12 : 0
-  return { x: (pitch.moveX / 65) * scale * side * (1 + flat), y: (pitch.moveY / 65) * scale * (1 - flat * .6) }
-}
-
-export function createFlight(pitch: PitchDefinition, stat: PitchStat, profile: PitcherProfile, target: { x: number; y: number }, power: number): PitchFlight {
-  const width = sweetSpot(stat.controlLevel)
-  const error = power - .82
-  const grade: Grade = Math.abs(error) <= width / 2 ? 'PERFECT' : Math.abs(error) <= width / 2 + .12 ? 'GOOD' : error < 0 ? 'EARLY' : 'LATE'
-  const tired = profile.stamina < 30 ? (30 - profile.stamina) / 30 * .35 : 0
-  const overthrow = power > .9 ? (power - .9) * 1.8 : 0
-  const spread = dispersion(stat.controlLevel) * (grade === 'PERFECT' ? .12 : grade === 'GOOD' ? .4 : .9) + tired * .4 + overthrow * .3
-  const angle = Math.random() * Math.PI * 2
-  const offset = spread * (.35 + Math.random() * .65)
-  // A missed release pulls the ball toward the middle — the classic mistake pitch.
-  const pull = grade === 'EARLY' || grade === 'LATE' ? .22 : 0
-  const landing = {
-    x: lerp(target.x, 0, pull) + Math.cos(angle) * offset,
-    y: lerp(target.y, 0, pull) + Math.sin(angle) * offset + (grade === 'LATE' ? .12 : grade === 'EARLY' ? -.1 : 0),
-  }
-  const speed = Math.round((statSpeed(pitch, stat) - (1 - power) * 8 - tired * 6) * 10) / 10
-  return {
-    pitch, speed, grade, duration: 18.44 / (speed / 3.6) * 1000, target, landing,
-    release: releasePoint(profile), movement: movementFor(pitch, stat, profile),
-    startedAt: performance.now(), control: stat.controlLevel, breakLevel: stat.breakLevel, power,
-  }
-}
-
-export function createPreviewFlight(pitch: PitchDefinition, stat: PitchStat, profile: PitcherProfile, target: { x: number; y: number }): PitchFlight {
-  const speed = statSpeed(pitch, stat)
-  return {
-    pitch, speed, grade: 'PERFECT', duration: 18.44 / (speed / 3.6) * 1000, target, landing: target,
-    release: releasePoint(profile), movement: movementFor(pitch, stat, profile),
-    startedAt: 0, control: stat.controlLevel, breakLevel: stat.breakLevel, power: .82,
-  }
-}
-
-export function pointOnFlight(f: PitchFlight, progress: number) {
-  const t = clamp(progress, 0, 1)
-  const bend = smooth(clamp((t - f.pitch.late) / (1 - f.pitch.late), 0, 1))
-  const x = lerp(f.release.x, f.landing.x - f.movement.x, t) + f.movement.x * bend
-  let y = lerp(f.release.y, f.landing.y - f.movement.y, t) + f.movement.y * bend
-  if (f.pitch.id === 'CURVE') y -= Math.sin(Math.PI * t) * .18
-  return { x, y, z: 18.44 * (1 - t) }
-}
-
-/** The moment the hitter must commit (≈0.2s before the plate). Faster pitch = earlier commit = less break seen. */
-export const decisionPoint = (f: PitchFlight) => clamp(1 - 210 / f.duration, .45, .8)
-
-/** Where the ball looks like it's going at the commit point (straight-line extrapolation). */
-export function perceivedLanding(f: PitchFlight) {
-  const td = decisionPoint(f)
-  const a = pointOnFlight(f, td - .04), b = pointOnFlight(f, td)
-  const k = (1 - td) / .04
-  return { x: b.x + (b.x - a.x) * k, y: b.y + (b.y - a.y) * k }
-}
-
-/** How well this pitch hides inside the previous pitch's tunnel (0–1). */
-export function tunnelScore(f: PitchFlight, prev: PitchFlight | null) {
-  if (!prev) return 0
-  const t = decisionPoint(f)
-  const a = pointOnFlight(f, t), b = pointOnFlight(prev, t)
-  const early = Math.hypot(a.x - b.x, a.y - b.y)
-  const late = Math.hypot(f.landing.x - prev.landing.x, f.landing.y - prev.landing.y)
-  const speedGap = Math.abs(f.speed - prev.speed)
-  const sameTube = clamp(1 - early / .42, 0, 1)
-  const divergence = clamp(late / .75 + speedGap / 22, 0, 1)
-  return sameTube * divergence
 }
 
 /* ───────────────────────── At-bat resolution ───────────────────────── */
@@ -350,6 +262,8 @@ export interface AtBatContext {
   seenSpeeds: number[]
   seenTypes: PitchType[]
   fastest: number
+  tier?: number
+  history?: PitchLog[]
 }
 
 export interface PitchResult {
@@ -382,9 +296,10 @@ export function resolvePitch(f: PitchFlight, c: AtBatContext): PitchResult {
   // 1) What the hitter sees at the commit point, plus the break he *expects* from the pitch he thinks it is.
   const tunnel = tunnelScore(f, c.previous)
   const td = decisionPoint(f)
-  const remaining = 1 - smooth(clamp((td - f.pitch.late) / (1 - f.pitch.late), 0, 1))
+  const remaining = 1 - movementProgress(f, td)
   const hides = same && f.pitch.family === 'BREAKING' ? .12 : 0
-  const recognize = clamp(.42 + eye * .4 + (f.pitch.family === 'FASTBALL' ? .25 : 0) + (f.pitch.id === 'CURVE' ? .3 : 0) - tunnel * .35 - hides, .05, .95)
+  const repeatedZone = (c.history ?? []).slice(-4).filter(p => p.pitch === f.pitch.id && Math.hypot(p.x - L.x, p.y - L.y) < .55).length
+  const recognize = clamp(.42 + repeatedZone * .09 + eye * .4 + (f.pitch.family === 'FASTBALL' ? .25 : 0) + (f.pitch.id === 'CURVE' ? .3 : 0) - tunnel * .35 - hides, .05, .95)
   // Eye-level change: high heat, then something down low.
   const eyeLevel = c.previous && c.previous.pitch.family === 'FASTBALL' && c.previous.landing.y < -.55 && L.y > .45 && f.pitch.family !== 'FASTBALL' ? 1 : 0
   const recognized = Math.random() < recognize - eyeLevel * .2
@@ -412,6 +327,9 @@ export function resolvePitch(f: PitchFlight, c: AtBatContext): PitchResult {
   if (balls === 3 && strikes === 0) { zoneSwing *= .3; chase *= .15 }
   else if ((balls === 2 && strikes === 0) || (balls === 3 && strikes === 1)) { zoneSwing *= 1.1; chase *= .6 }
   if (strikes === 2) { zoneSwing = .88; chase *= 1.35 }
+  const awayMatchup = same && toInside(L.x) < -.4 && (f.pitch.family === 'BREAKING' || f.pitch.family === 'FASTBALL')
+  const backdoor = !same && f.pitch.family === 'BREAKING' && toInside(L.x) < -.65 && inZone(L, .15)
+  if (awayMatchup || (!same && f.pitch.id === 'CHANGEUP') || backdoor) chase *= 1.15
   chase *= 1.35 - eye * .75
   zoneSwing *= .85 + b.aggression * .3
   chase *= .8 + b.aggression * .4
@@ -438,11 +356,11 @@ export function resolvePitch(f: PitchFlight, c: AtBatContext): PitchResult {
   if (c.previous) expect = lerp(expect, c.previous.speed, tunnel * .6)
   if ((balls >= 2 && strikes < 2)) expect = lerp(expect, c.fastest, .5)
   const early = Math.min(.85, (expect - f.speed) / 30 * (recognized ? .45 : 1)) // + = out in front
-  const reaction = 143 + b.contact * 12 + diff.contactBonus * 30
+  const reaction = 143 + b.contact * 12 + diff.contactBonus * 30 + TIERS[c.tier ?? 0].reaction
   const lateness = Math.max(0, f.speed - reaction) / 28
   const timing = Math.abs(early) + lateness * (1 - Math.max(0, early) * .5)
   const repeat = c.seenTypes.slice(-2).filter(t => t === f.pitch.id).length
-  const timingErr = Math.max(0, timing - repeat * .12)
+  const timingErr = Math.max(0, timing - repeat * .12 - repeatedZone * .06)
 
   // 4) Bat-to-ball.
   const missX = L.x - barrel.x, missY = L.y - barrel.y
@@ -459,9 +377,11 @@ export function resolvePitch(f: PitchFlight, c: AtBatContext): PitchResult {
   if (!same && f.pitch.id === 'CUTTER' && inX > .3) platoon -= .08
   const weak = b.weakness === f.pitch.family ? -.1 : 0
   const protect = strikes === 2 ? .08 : 0
-  const q = b.contact * .55 + .36 + diff.contactBonus + late + protect + platoon + weak
+  const sittingFastball = (balls === 2 && strikes === 0 || balls === 3 && strikes === 1) && f.pitch.family === 'FASTBALL' && inZone(L)
+  const q = repeatedZone * .045 + (sittingFastball ? .1 : 0) - (backdoor ? .08 : 0) + b.contact * .55 + .36 + diff.contactBonus + late + protect + platoon + weak
     - spatial * 1.0 - timingErr * .6 - outside * .85 - tunnel * .12 - eyeLevel * .06 - (highHeat ? .1 : 0) + gauss() * .16
 
+  if (f.breakLevel >= 50 && spatial > .25) tags.push('LATE BREAK')
   if (tunnel > .45) tags.push('터널')
   if (eyeLevel && spatial > .25) tags.push('눈높이 흔들기')
   if (highHeat && missY < -.25) tags.push('하이 패스트볼')
@@ -560,13 +480,14 @@ export function applyOutcome(g: GameState, f: PitchFlight, r: PitchResult): { ga
   const ev: PitchEvents = { paEnded: false, strikeout: false, out: false, hit: false, walk: false, runs: 0, inningOver: false, reward: 0, mastery: 4 }
   let call = { ...CALLS[o] }
   next.abLog = [...g.abLog, { pitch: f.pitch.id, speed: f.speed, x: f.landing.x, y: f.landing.y, px: r.barrel.x, py: r.barrel.y, call: CALLS[o].text, tag: r.tags[0] ?? '' }]
+  next.pitchLog = [...g.pitchLog, next.abLog[next.abLog.length - 1]]
   const score = (runs: number) => { next.runsAgainst += runs; next.lineScore[next.lineScore.length - 1] += runs; ev.runs = runs }
 
   if (o === 'BALL') {
     next.balls++
     if (next.balls >= 4) { const a = advance(next.bases, 'BALL'); next.bases = a.bases; score(a.runs); ev.walk = true; next.walks++; next.inningWalks++; call = { text: '볼넷', tone: 'ball' } }
   } else if (o === 'HIT_BY_PITCH') {
-    const a = advance(next.bases, 'HIT_BY_PITCH'); next.bases = a.bases; score(a.runs); ev.walk = true; next.walks++; next.inningWalks++
+    const a = advance(next.bases, 'HIT_BY_PITCH'); next.bases = a.bases; score(a.runs); ev.walk = true; next.inningWalks++
   } else if (o === 'CALLED_STRIKE' || o === 'SWINGING_STRIKE') {
     next.strikes++; ev.reward = o === 'SWINGING_STRIKE' ? 3 : 2; ev.mastery = o === 'SWINGING_STRIKE' ? 10 : 7
     if (next.strikes >= 3) {
@@ -581,6 +502,8 @@ export function applyOutcome(g: GameState, f: PitchFlight, r: PitchResult): { ga
   } else {
     const a = advance(next.bases, o); next.bases = a.bases; score(a.runs); ev.hit = true; next.hits++; next.inningHits++; ev.mastery = 2
   }
+  if (ev.out) next.totalOuts++
+  if (ev.out || ev.hit) next.atBats++
   ev.paEnded = ev.walk || ev.hit || ev.out
   if (ev.runs) call = { ...call, text: `${call.text} · ${ev.runs}실점` }
   if (ev.paEnded) { next.balls = 0; next.strikes = 0; next.batterIndex = (next.batterIndex + 1) % 9; next.abLog = [] }

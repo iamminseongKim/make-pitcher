@@ -30,3 +30,33 @@ pnpm sim:platoon # 구종 × 같은 손/반대 손 헛스윙률 점검
 - **타이밍**: 타자는 가장 빠른 공에 맞추고 본 공의 구속에 적응합니다. 같은 구종을 연속으로 던지면 타이밍을 잡힙니다.
 
 진행 상황은 `localStorage`(`ace-project-save-v2`)에 저장되며 v1 세이브의 투수 정보는 자동으로 이어집니다.
+
+## Season and pitch systems
+
+Five-game seasons begin in Amateur and progress through KBO Futures, KBO League,
+Triple-A, and MLB. At season end, choose promotion or repeat the current tier;
+at MLB, repeat starts another MLB season. Rosters are fictional, tier-themed
+opponents, not a live roster feed. Difficulty selection is an additional modifier.
+
+The final screen plots every recorded pitch in catcher-view coordinates, with a
+nine-cell strike zone, plate, pitch colors, counts, and percentages. Upgrade Pitch
+Arsenal opens the existing training shop without dismissing the result. Game rewards
+and season records are committed when continuing, avoiding duplicate rewards on reload.
+
+Season ERA uses all runs allowed (the game has no errors/unearned runs), WHIP uses
+hits plus walks and excludes HBP, and BAA excludes walks/HBP. Rates use recorded
+outs rather than decimal baseball innings. Ties count as games but not wins/losses.
+Older saves retain career data; unavailable historical pitch locations are not invented.
+
+Modules: `physics.ts` owns continuous trajectories and tunneling; `game.ts` owns
+pitch resolution and game rules; `season.ts` owns tiers and season aggregation;
+`render.ts` draws the canvas; `PitchChart.tsx` draws the SVG chart; `audio.ts` owns
+sound generation; `App.tsx` coordinates UI. Strike-three slowdown changes visual
+time only, preserving the AI's physical flight duration. Reduced-motion preferences
+suppress the slowdown and impact camera zoom.
+
+Validation: `pnpm test`, `pnpm build`, and `pnpm sim:platoon`. The regression suite
+checks smooth trajectories across all pitches, arm slots, hands and movement levels,
+stat accounting, completed-season aggregation, old-save migration, chart coordinates,
+and seeded pitch-recognition behavior. The platoon simulation reports distributions
+for manual balance review rather than asserting exact random outcomes.

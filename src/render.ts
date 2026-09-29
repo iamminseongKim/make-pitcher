@@ -10,6 +10,7 @@ export interface BattedBall { at: number; spray: number; type: 'GROUND' | 'LINE'
 
 export interface RenderScene {
   profile: PitcherProfile
+  strikeoutChance?: boolean
   batterSide: Hand
   teamColor: string
   target: { x: number; y: number }
@@ -344,6 +345,11 @@ function drawResult(ctx: CanvasRenderingContext2D, result: RenderScene['result']
 export function renderScene(ctx: CanvasRenderingContext2D, scene: RenderScene) {
   const { flight, flightProgress: t, now } = scene
   ctx.clearRect(0, 0, STAGE.width, STAGE.height)
+  ctx.save()
+  const impactAge = (now - scene.result.at) / 1000
+  const punch = !window.matchMedia('(prefers-reduced-motion: reduce)').matches && scene.result.tone === 'k' ? Math.max(0, 1 - impactAge / 1.2) : 0
+  const zoom = 1 + punch * .10
+  ctx.translate(STAGE.zoneX, STAGE.zoneY); ctx.scale(zoom, zoom); ctx.translate(-STAGE.zoneX, -STAGE.zoneY)
   drawScenery(ctx, now)
   drawPitcher(ctx, scene.profile, flight, t)
   drawZone(ctx, scene)
@@ -354,5 +360,11 @@ export function renderScene(ctx: CanvasRenderingContext2D, scene: RenderScene) {
   drawBatter(ctx, scene.batterSide, scene.anim, scene.teamColor, now)
   if (flight && t <= 1) drawBall(ctx, flight, t)
   if (scene.batted) drawBatted(ctx, scene.batted, now)
+  if (punch > 0) {
+    ctx.strokeStyle = `rgba(230,255,122,${punch})`; ctx.lineWidth = 2 + punch * 3
+    ctx.strokeRect(ZX(-1), ZY(-1), STAGE.zoneW, STAGE.zoneH)
+    ctx.beginPath(); ctx.arc(STAGE.zoneX, STAGE.zoneY, 20 + impactAge * 90, 0, Math.PI * 2); ctx.stroke()
+  }
+  ctx.restore()
   drawResult(ctx, scene.result, now)
 }
