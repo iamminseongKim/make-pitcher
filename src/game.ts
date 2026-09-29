@@ -1,18 +1,13 @@
-import { decisionPoint, movementProgress, tunnelScore, type PitchFlight } from './physics'
-export { createFlight, createPreviewFlight, pointOnFlight, decisionPoint, perceivedLanding, tunnelScore } from './physics'
-export type { PitchFlight } from './physics'
-import { TIERS, newSeason, type Season } from './season'
+import { decisionPoint, movementProgress, planeSteepness, tunnelRead, type PitchFlight } from './physics'
+export { createFlight, createPreviewFlight, pointOnFlight, decisionPoint, perceivedLanding, tunnelScore, tunnelRead, releaseQuality, extensionOf, releaseHeightOf, approachAngle, planeSteepness, TUNNEL_POINT, SWEET_CENTER, MEATBALL_MISS } from './physics'
+export type { PitchFlight, TunnelRead } from './physics'
+import { TIERS, newSeason, normalizeSeason, tierOf, type Season } from './season'
 export type PitchType = 'FOUR_SEAM' | 'SINKER' | 'CUTTER' | 'SPLITTER' | 'CHANGEUP' | 'SLIDER' | 'CURVE' | 'SWEEPER'
 export type StatKey = 'velocityLevel' | 'controlLevel' | 'breakLevel'
 export type Hand = 'R' | 'L'
 export type ArmSlot = 'OVERHAND' | 'THREE_QUARTER' | 'SIDEARM' | 'SUBMARINE'
-export type Grade = 'PERFECT' | 'GOOD' | 'EARLY' | 'LATE'
-export type Difficulty = 'ROOKIE' | 'PRO' | 'LEGEND'
-export const DIFFICULTIES: Record<Difficulty, { label: string; tpMultiplier: number; contactBonus: number; eyeBonus: number }> = {
-  ROOKIE: { label: '루키', tpMultiplier: 1, contactBonus: -.1, eyeBonus: -.15 },
-  PRO: { label: '프로', tpMultiplier: 1.5, contactBonus: 0, eyeBonus: 0 },
-  LEGEND: { label: '레전드', tpMultiplier: 2.2, contactBonus: .1, eyeBonus: .15 },
-}
+/** MISS = critical miss on the release meter → hanging meatball. */
+export type Grade = 'PERFECT' | 'GOOD' | 'EARLY' | 'LATE' | 'MISS'
 export const STARTER_LEVELS = [0, 8, 5, 2] as const
 
 export interface PitchStat {
@@ -28,20 +23,12 @@ export interface PitcherProfile {
   height: number
   hand: Hand
   armSlot: ArmSlot
-  difficulty: Difficulty
   trainingPoints: number
   stamina: number
+  /** Stamina the arm could not recover before this start (overuse in the last game). */
+  fatigue: number
   arsenal: Record<PitchType, PitchStat>
   created: boolean
-}
-
-export interface CareerStats {
-  wins: number
-  losses: number
-  strikeouts: number
-  innings: number
-  runs: number
-  games: number
 }
 
 export interface PitchDefinition {
@@ -85,7 +72,8 @@ const gauss = () => { let u = 0, v = 0; while (!u) u = Math.random(); while (!v)
 const pick = <T,>(list: readonly T[]) => list[Math.floor(Math.random() * list.length)]
 
 export const statSpeed = (pitch: PitchDefinition, stat: PitchStat) => Math.round(lerp(pitch.minSpeed, pitch.maxSpeed, (stat.velocityLevel - 1) / 98) * 10) / 10
-export const sweetSpot = (level: number) => lerp(.10, .28, (level - 1) / 98)
+/** Width of the PERFECT window on the release meter (fraction of the gauge). */
+export const sweetSpot = (level: number) => lerp(.08, .22, (level - 1) / 98)
 export const dispersion = (level: number) => lerp(.62, .035, (level - 1) / 98)
 export const breakScale = (level: number) => lerp(.34, 1, (level - 1) / 98)
 export const upgradeCost = (level: number) => Math.round(18 + Math.pow(level, 1.48) * 2.4)
@@ -177,7 +165,9 @@ export function zoneHeat(b: Batter, side: Hand): number[][] {
 
 /* ───────────────────────── Game state ───────────────────────── */
 
-export interface PitchLog { pitch: PitchType; speed: number; x: number; y: number; px: number; py: number; call: string; tag: string }
+export interface PitchLog { pitch: PitchType; speed: number; x: number; y: number; px: number; py: number; call: string; tag: string; meatball?: boolean }
+/** One finished plate appearance, remembered by the hitter for the rest of the game. */
+export interface PlateAppearance { inning: number; pitches: PitchLog[]; result: string }
 export interface GameState {
   id: number
   tier: number
@@ -202,47 +192,186 @@ export interface GameState {
   strikeouts: number
   hits: number
   walks: number
+  hbp: number
+  homeRuns: number
   abLog: PitchLog[]
+  /** Batter id → his earlier plate appearances this game. */
+  memory: Record<string, PlateAppearance[]>
+  /** Batter id → confidence, -1 (rattled) … +1 (locked in). */
+  confidence: Record<string, number>
+  /** Entered the 9th protecting a 1–3 run lead. */
+  saveOpp: boolean
+  /** Times the pitcher waved off the manager's hook this game. */
+  refusals: number
+  /** Pitcher was pulled; the bullpen finished the game. */
+  pulled: boolean
+  /** Runs charged to the bullpen after the pitcher left. */
+  bullpenRuns: number
+  /** Score margin (ours − theirs) when the pitcher left. */
+  exitLead: number
   over: boolean
 }
 
-export function newGame(prev?: GameState, difficulty: Difficulty = 'PRO', tier = 0): GameState {
+const US_NAMES = ['James Carter', 'Luis Rivera', 'Marcus Reed', 'Diego Santos', 'Alex Brooks', 'Kenji Mori', 'Carlos Vega', 'Ryan Hayes', 'Evan Cole']
+export function newGame(prev?: GameState, tier = 0): GameState {
   const opponent = prev ? (prev.opponent + 1 + Math.floor(Math.random() * (TEAMS.length - 1))) % TEAMS.length : Math.floor(Math.random() * TEAMS.length)
   tier = clamp(Math.floor(tier), 0, TIERS.length - 1)
-  const strength = (difficulty === 'LEGEND' ? .06 : difficulty === 'ROOKIE' ? -.06 : 0) + TIERS[tier].strength
   return {
-    id: (prev?.id ?? 0) + 1, tier, pitchLog: [], totalOuts: 0, atBats: 0, opponent, lineup: makeLineup(strength).map((b, i) => ({ ...b, name: tier < 3 ? b.name : ['James Carter', 'Luis Rivera', 'Marcus Reed', 'Diego Santos', 'Alex Brooks', 'Kenji Mori', 'Carlos Vega', 'Ryan Hayes', 'Evan Cole'][i] })), batterIndex: 0,
+    id: (prev?.id ?? 0) + 1, tier, pitchLog: [], totalOuts: 0, atBats: 0, opponent, batterIndex: 0,
+    lineup: makeLineup(TIERS[tier].strength).map((b, i) => ({ ...b, name: tier < 3 ? b.name : US_NAMES[i] })),
     inning: 1, outs: 0, balls: 0, strikes: 0, bases: [false, false, false], runsAgainst: 0, runsFor: 0,
-    lineScore: [0], ourScore: [], inningHits: 0, inningWalks: 0, pitches: 0, strikeouts: 0, hits: 0, walks: 0, abLog: [], over: false,
+    lineScore: [0], ourScore: [], inningHits: 0, inningWalks: 0, pitches: 0, strikeouts: 0, hits: 0, walks: 0, hbp: 0, homeRuns: 0,
+    abLog: [], memory: {}, confidence: {}, saveOpp: false, refusals: 0, pulled: false, bullpenRuns: 0, exitLead: 0, over: false,
   }
 }
 
 export function defaultProfile(): PitcherProfile {
   return {
-    name: 'ROOKIE', height: 185, hand: 'R', armSlot: 'THREE_QUARTER', difficulty: 'PRO', trainingPoints: 90, stamina: 100, created: false,
+    name: 'ROOKIE', height: 185, hand: 'R', armSlot: 'THREE_QUARTER', trainingPoints: 90, stamina: 100, fatigue: 0, created: false,
     arsenal: Object.fromEntries(PITCHES.map(p => [p.id, { unlocked: false, velocityLevel: 1, controlLevel: 1, breakLevel: 1, mastery: 0 }])) as Record<PitchType, PitchStat>,
   }
 }
-export const defaultCareer = (): CareerStats => ({ wins: 0, losses: 0, strikeouts: 0, innings: 0, runs: 0, games: 0 })
 
+export interface SaveData { profile: PitcherProfile; game: GameState; season: Season; history: Season[] }
 export const SAVE_KEY = 'ace-project-save-v2'
-export function loadSave(): { profile: PitcherProfile; game: GameState; career: CareerStats; season: Season } {
+export function loadSave(): SaveData {
   const base = defaultProfile()
   try {
     const raw = localStorage.getItem(SAVE_KEY) ?? localStorage.getItem('ace-project-save-v1')
     const parsed = JSON.parse(raw || 'null')
     if (!parsed?.profile?.arsenal || !parsed.profile.created) throw new Error('No save')
+    const { difficulty: _legacyDifficulty, ...savedProfile } = parsed.profile
     const profile: PitcherProfile = {
-      ...base, ...parsed.profile,
+      ...base, ...savedProfile,
       arsenal: Object.fromEntries(PITCHES.map(p => [p.id, { ...base.arsenal[p.id], ...parsed.profile.arsenal[p.id] }])) as Record<PitchType, PitchStat>,
     }
-    const game: GameState = parsed.game?.lineup?.length === 9 ? { ...newGame(undefined, profile.difficulty), ...parsed.game } : newGame(undefined, profile.difficulty)
+    const history: Season[] = Array.isArray(parsed.history) ? parsed.history.map((h: Partial<Season>, i: number) => normalizeSeason(h, i + 1)) : []
+    const season = normalizeSeason(parsed.season, history.length + 1)
+    const fresh = newGame(undefined, season.tier)
+    const game: GameState = parsed.game?.lineup?.length === 9 ? { ...fresh, ...parsed.game } : fresh
+    game.tier = clamp(Math.floor(Number(game.tier) || 0), 0, TIERS.length - 1)
     game.totalOuts = parsed.game?.totalOuts ?? ((game.over ? game.inning : game.inning - 1) * 3 + game.outs)
     game.atBats = parsed.game?.atBats ?? game.totalOuts + game.hits
-    return { profile, game, season: { ...newSeason(), ...parsed.season, tier: clamp(Math.floor(parsed.season?.tier ?? 0), 0, 4) }, career: { ...defaultCareer(), ...parsed.career } }
+    return { profile, game, season, history }
   } catch {
-    return { profile: base, game: newGame(), career: defaultCareer(), season: newSeason() }
+    return { profile: base, game: newGame(), season: newSeason(), history: [] }
   }
+}
+
+/* ───────────────────────── Stamina, the hook, and overuse ───────────────────────── */
+
+/**
+ * A starter has roughly 100 pitches in him. Every pitch costs ~1 stamina; max-effort releases and
+ * high-stress pitches (runners on, deep counts) cost more. Between innings he only catches his breath.
+ */
+export const STAMINA = { perPitch: 1, maxEffort: .8, stress: .35, inningRest: 3, hookAt: 30, maxRefusals: 1, maxFatigue: 45 } as const
+export function staminaCost(meter: number, g: Pick<GameState, 'bases' | 'balls' | 'strikes'>) {
+  const maxEffort = meter > .9 && meter <= 1 ? STAMINA.maxEffort : 0
+  const stress = (g.bases.some(Boolean) ? STAMINA.stress : 0) + (g.balls === 3 || (g.balls >= 2 && g.strikes === 2) ? STAMINA.stress : 0)
+  return STAMINA.perPitch + maxEffort + stress
+}
+/** The manager comes out once the tank is low (or the pitch count is out of hand). */
+export const needsHook = (stamina: number, g: Pick<GameState, 'pitches' | 'over' | 'pulled'>) => !g.over && !g.pulled && (stamina < STAMINA.hookAt || g.pitches >= 120)
+export const canRefuseHook = (g: Pick<GameState, 'refusals'>) => (g.refusals ?? 0) < STAMINA.maxRefusals
+/**
+ * Overuse carries into the next start: pitches beyond 100, finishing on fumes, and every
+ * waved-off hook eat into the next game's starting stamina.
+ */
+export function fatigueAfter(g: Pick<GameState, 'pitches' | 'refusals'>, stamina: number) {
+  return Math.round(clamp(Math.max(0, g.pitches - 100) * 1.5 + Math.max(0, 25 - stamina) * 1.2 + (g.refusals ?? 0) * 6, 0, STAMINA.maxFatigue))
+}
+
+/** Bullpen half inning. Deeper leagues have better relievers, but better lineups too. */
+function bullpenHalf(tier: number, fraction = 1) {
+  const r = Math.random() / fraction
+  const t = tier * .01
+  return r < .7 - t ? 0 : r < .87 - t ? 1 : r < .95 ? 2 : 3
+}
+export type Decision = 'W' | 'L' | 'ND' | 'T'
+/** The pitcher hands the ball over: the bullpen and our lineup play out the rest of the game. */
+export function bullpenFinish(g: GameState): GameState {
+  const next: GameState = { ...g, lineScore: [...g.lineScore], ourScore: [...g.ourScore], pulled: true, exitLead: g.runsFor - g.runsAgainst, abLog: [], balls: 0, strikes: 0 }
+  let inning = g.inning, bullpen = 0
+  const top = (fraction: number) => { const r = bullpenHalf(g.tier, fraction); next.lineScore[next.lineScore.length - 1] += r; next.runsAgainst += r; bullpen += r }
+  // Finish the current top half from the current out count.
+  if (g.outs < 3) top((3 - g.outs) / 3)
+  for (;;) {
+    if (inning >= 9 && next.runsFor > next.runsAgainst) break // no need for the bottom half
+    const ours = simulateOurHalf()
+    next.ourScore.push(ours); next.runsFor += ours
+    if (inning >= 9 && next.runsFor !== next.runsAgainst) break
+    if (inning >= 12) break
+    inning++
+    next.lineScore.push(0)
+    top(1)
+  }
+  return { ...next, inning, bullpenRuns: (g.bullpenRuns ?? 0) + bullpen, outs: 0, bases: [false, false, false], over: true, saveOpp: false }
+}
+/** W/L/ND for our pitcher. A pulled starter needs 5 innings and to leave ahead (or behind) for a decision. */
+export function pitcherDecision(g: GameState): Decision {
+  const won = g.runsFor > g.runsAgainst, lost = g.runsFor < g.runsAgainst
+  if (!g.pulled) return won ? 'W' : lost ? 'L' : 'T'
+  if (won && g.exitLead > 0 && g.totalOuts >= 15) return 'W'
+  if (lost && g.exitLead < 0) return 'L'
+  return 'ND'
+}
+export const DECISION_LABEL: Record<Decision, string> = { W: '승리투수', L: '패전투수', ND: '노 디시전', T: '무승부' }
+
+/* ───────────────────────── Batter memory & mood ───────────────────────── */
+
+/** 3×3 zone cell (0–8, catcher view). Out-of-zone pitches count toward the nearest edge cell. */
+export const zoneCell = (p: { x: number; y: number }) => {
+  const col = p.x < -1 / 3 ? 0 : p.x > 1 / 3 ? 2 : 1, row = p.y < -1 / 3 ? 0 : p.y > 1 / 3 ? 2 : 1
+  return row * 3 + col
+}
+export const CELL_LABEL = ['높은 왼쪽', '높은 가운데', '높은 오른쪽', '가운데 왼쪽', '한가운데', '가운데 오른쪽', '낮은 왼쪽', '낮은 가운데', '낮은 오른쪽']
+
+export interface Adaptation { level: number; timesFaced: number; typeShare: number; zoneShare: number; seen: number }
+/**
+ * How well a hitter has "timed" a pitch type / location from his earlier trips to the plate.
+ * 0 = fresh look, 1 = he's sitting on it.
+ */
+export function batterAdaptation(prior: PlateAppearance[] | undefined, pitch: PitchType, loc: { x: number; y: number }): Adaptation {
+  const seenPitches = (prior ?? []).flatMap(pa => pa.pitches)
+  const timesFaced = prior?.length ?? 0
+  if (!seenPitches.length) return { level: 0, timesFaced, typeShare: 0, zoneShare: 0, seen: 0 }
+  const cell = zoneCell(loc)
+  const typeShare = seenPitches.filter(p => p.pitch === pitch).length / seenPitches.length
+  const zoneShare = seenPitches.filter(p => zoneCell(p) === cell).length / seenPitches.length
+  const combo = seenPitches.filter(p => p.pitch === pitch && zoneCell(p) === cell).length / seenPitches.length
+  const level = clamp((typeShare * .45 + zoneShare * .6 + combo * .9) * (timesFaced >= 2 ? 1 : .8), 0, 1)
+  return { level, timesFaced, typeShare, zoneShare, seen: seenPitches.length }
+}
+
+export type Mood = 'LOCKED_IN' | 'CONFIDENT' | 'NEUTRAL' | 'PRESSING' | 'RATTLED'
+export const moodOf = (c: number): Mood => c > .45 ? 'LOCKED_IN' : c > .15 ? 'CONFIDENT' : c < -.45 ? 'RATTLED' : c < -.15 ? 'PRESSING' : 'NEUTRAL'
+export const MOOD_LABEL: Record<Mood, string> = { LOCKED_IN: '감 잡음', CONFIDENT: '자신감', NEUTRAL: '평정', PRESSING: '조급함', RATTLED: '멘붕' }
+const CONFIDENCE_DELTA: Partial<Record<PitchOutcome, number>> = {
+  BALL: .03, CALLED_STRIKE: -.04, SWINGING_STRIKE: -.09, FOUL: .01, GROUND_OUT: -.12, FLY_OUT: -.1, LINE_OUT: -.02, POP_OUT: -.15,
+  SINGLE: .28, DOUBLE: .38, HOME_RUN: .55, HIT_BY_PITCH: .05,
+}
+
+/** Pre-pitch scouting snippet: the one or two things a catcher would flash to the pitcher. */
+export function scoutingReport(b: Batter, side: Hand, pitcherHand: Hand, prior: PlateAppearance[] | undefined, arsenal: PitchType[]): string[] {
+  const notes: string[] = []
+  const same = side === pitcherHand
+  const weakPitch = arsenal.find(t => pitchById(t).family === b.weakness)
+  if (weakPitch) notes.push(`${pitchById(weakPitch).short}에 약함`)
+  const heat = zoneHeat(b, side)
+  let cold = 0; heat.flat().forEach((v, i, a) => { if (v < a[cold]) cold = i })
+  notes.push(`콜드존: ${CELL_LABEL[cold]}`)
+  const seen = (prior ?? []).flatMap(pa => pa.pitches)
+  if (seen.length) {
+    const counts = new Map<PitchType, number>(); seen.forEach(p => counts.set(p.pitch, (counts.get(p.pitch) ?? 0) + 1))
+    const [top, n] = [...counts.entries()].sort((a, z) => z[1] - a[1])[0]
+    if (n / seen.length >= .5) notes.push(`지난 타석 ${pitchById(top).short} ${n}/${seen.length} → 노리고 있음`)
+    const unseen = arsenal.find(t => !counts.has(t))
+    if (unseen) notes.push(`${pitchById(unseen).short} 아직 못 봄`)
+  } else if (!weakPitch) {
+    const best = arsenal.find(t => same ? ['SLIDER', 'SWEEPER'].includes(t) : ['CHANGEUP', 'SPLITTER'].includes(t))
+    if (best) notes.push(`${same ? '같은 손' : '반대 손'} · ${pitchById(best).short} 유효`)
+  }
+  return notes.slice(0, 3)
 }
 
 /* ───────────────────────── At-bat resolution ───────────────────────── */
@@ -257,13 +386,18 @@ export interface AtBatContext {
   balls: number
   strikes: number
   inning: number
-  difficulty: Difficulty
+  /** League tier (0 = Amateur … 4 = MLB). The tier is the difficulty. */
+  tier?: number
   previous: PitchFlight | null
   seenSpeeds: number[]
   seenTypes: PitchType[]
   fastest: number
-  tier?: number
+  /** Pitches earlier in this plate appearance. */
   history?: PitchLog[]
+  /** This hitter's earlier plate appearances this game. */
+  memory?: PlateAppearance[]
+  /** -1 … 1 */
+  confidence?: number
 }
 
 export interface PitchResult {
@@ -271,6 +405,7 @@ export interface PitchResult {
   swing: boolean
   perceived: { x: number; y: number }
   tunnel: number
+  adaptation: number
   tags: string[]
   barrel: { x: number; y: number }
   sprayAngle: number // -1 (third base) … 1 (first base)
@@ -278,44 +413,52 @@ export interface PitchResult {
 
 export const inZone = (p: { x: number; y: number }, pad = 0) => Math.abs(p.x) <= 1 + pad && Math.abs(p.y) <= 1 + pad
 
+/** "Rise" illusion of a four-seamer: more IVB than the hitter's eye expects from that release, amplified by a steep plane. */
+export const riseIllusion = (f: PitchFlight) => f.pitch.id === 'FOUR_SEAM' ? clamp((f.ivb - 30) / 22, 0, 1) * (.6 + .4 * planeSteepness(f.releaseHeight)) : 0
+
 export function resolvePitch(f: PitchFlight, c: AtBatContext): PitchResult {
   const b = c.batter
+  const league = tierOf(c.tier)
   const side = batterSide(b, c.pitcherHand)
   const same = side === c.pitcherHand
-  const diff = DIFFICULTIES[c.difficulty]
   const late = Math.min(.12, (c.inning - 1) * .012)
-  const eye = clamp(b.eye + diff.eyeBonus + late * .5, 0, 1)
+  const conf = clamp(c.confidence ?? 0, -1, 1)
+  const eye = clamp(b.eye + league.eye + late * .5, 0, 1)
   const toInside = (x: number) => side === 'R' ? -x : x // + = inside to this hitter
   const L = f.landing
   const inX = toInside(L.x)
   const tags: string[] = []
+  const adapt = batterAdaptation(c.memory, f.pitch.id, L).level
+  const meatball = f.meatball
 
   // Hit by pitch: way inside at body height.
-  if (inX > 1.85 && L.y > -1.5 && L.y < 1.6) return { outcome: 'HIT_BY_PITCH', swing: false, perceived: L, tunnel: 0, tags: ['몸에 맞는 공'], barrel: L, sprayAngle: 0 }
+  if (inX > 1.85 && L.y > -1.5 && L.y < 1.6) return { outcome: 'HIT_BY_PITCH', swing: false, perceived: L, tunnel: 0, adaptation: adapt, tags: ['몸에 맞는 공'], barrel: L, sprayAngle: 0 }
 
   // 1) What the hitter sees at the commit point, plus the break he *expects* from the pitch he thinks it is.
-  const tunnel = tunnelScore(f, c.previous)
-  const td = decisionPoint(f)
+  const tr = tunnelRead(f, c.previous)
+  const tunnel = meatball ? 0 : tr.score
+  const td = decisionPoint(f, league.latencyMs)
   const remaining = 1 - movementProgress(f, td)
   const hides = same && f.pitch.family === 'BREAKING' ? .12 : 0
   const repeatedZone = (c.history ?? []).slice(-4).filter(p => p.pitch === f.pitch.id && Math.hypot(p.x - L.x, p.y - L.y) < .55).length
-  const recognize = clamp(.42 + repeatedZone * .09 + eye * .4 + (f.pitch.family === 'FASTBALL' ? .25 : 0) + (f.pitch.id === 'CURVE' ? .3 : 0) - tunnel * .35 - hides, .05, .95)
+  const recognize = clamp(.42 + repeatedZone * .09 + adapt * .3 + eye * .4 + (f.pitch.family === 'FASTBALL' ? .25 : 0) + (f.pitch.id === 'CURVE' ? .3 : 0) - tunnel * .5 - hides - league.latencyMs / 400, .05, .95)
   // Eye-level change: high heat, then something down low.
   const eyeLevel = c.previous && c.previous.pitch.family === 'FASTBALL' && c.previous.landing.y < -.55 && L.y > .45 && f.pitch.family !== 'FASTBALL' ? 1 : 0
-  const recognized = Math.random() < recognize - eyeLevel * .2
+  const recognized = meatball || Math.random() < recognize - eyeLevel * .2
   const typical = Math.min(1, .62 / breakScale(f.breakLevel))
   const armSide = c.pitcherHand === 'R' ? 1 : -1
-  const ride = f.pitch.id === 'FOUR_SEAM' ? .55 : 1 // hitters never fully believe the ride
+  const rise = riseIllusion(f)
+  const ride = f.pitch.id === 'FOUR_SEAM' ? .55 - rise * .3 : 1 // hitters never fully believe the ride
   const expectMove = recognized ? { x: f.movement.x * typical, y: f.movement.y * typical * ride } : { x: -.08 * armSide, y: -.38 }
   const noise = .04 + (1 - eye) * .1
   // Whatever break he didn't expect in the unseen part of the flight becomes miss distance.
   const perceived = {
-    x: L.x - (f.movement.x - expectMove.x) * remaining + gauss() * noise,
-    y: L.y - (f.movement.y - expectMove.y) * remaining + gauss() * noise,
+    x: L.x - (f.movement.x - expectMove.x) * remaining * (1 - adapt * .4) + gauss() * noise,
+    y: L.y - (f.movement.y - expectMove.y) * remaining * (1 - adapt * .4) + gauss() * noise,
   }
 
   // Mid-swing adjustment: good contact hitters chase the ball down with the barrel.
-  const adjust = .2 + b.contact * .3 + (td - .5) * .4
+  const adjust = .2 + b.contact * .3 + (td - .5) * .4 + adapt * .15
   const barrel = { x: lerp(perceived.x, L.x, adjust), y: lerp(perceived.y, L.y, adjust * .8) }
 
   // 2) Swing decision.
@@ -330,37 +473,44 @@ export function resolvePitch(f: PitchFlight, c: AtBatContext): PitchResult {
   const awayMatchup = same && toInside(L.x) < -.4 && (f.pitch.family === 'BREAKING' || f.pitch.family === 'FASTBALL')
   const backdoor = !same && f.pitch.family === 'BREAKING' && toInside(L.x) < -.65 && inZone(L, .15)
   if (awayMatchup || (!same && f.pitch.id === 'CHANGEUP') || backdoor) chase *= 1.15
-  chase *= 1.35 - eye * .75
+  chase *= (1.35 - eye * .75) * league.discipline
+  chase *= 1 + tunnel * .5 // it looked like the last one until it didn't
+  chase *= 1 - adapt * .3 // he's seen this one; he lays off
+  chase *= 1 - conf * .3 // frustrated hitters expand the zone, locked-in hitters don't
   zoneSwing *= .85 + b.aggression * .3
   chase *= .8 + b.aggression * .4
   // High heat: a rising fastball above the belt looks like a meatball.
   const highHeat = f.pitch.id === 'FOUR_SEAM' && L.y < -.75 && f.speed >= 140
-  if (highHeat && strikes === 2) chase *= 1.3
+  if (highHeat && strikes === 2) chase *= 1.3 + rise * .3
+  // A hanging meatball: the hitter pounces.
+  if (meatball && !(balls === 3 && strikes === 0)) zoneSwing = Math.max(zoneSwing, .93)
   const swingChance = clamp(looksStrike ? zoneSwing : chase, 0, .97)
   const swing = Math.random() < swingChance
 
+  if (meatball) tags.push('실투!')
   const actualStrike = inZone(L, .06) || (inZone(L, .14) && Math.random() < .45)
   if (!swing) {
     if (actualStrike) {
       const edge = Math.max(Math.abs(L.x), Math.abs(L.y))
       tags.push(edge > .78 ? '코너 꽉 찬 공' : strikes === 2 ? '얼어붙음' : '지켜봄')
-      return { outcome: 'CALLED_STRIKE', swing, perceived, tunnel, tags, barrel, sprayAngle: 0 }
+      return { outcome: 'CALLED_STRIKE', swing, perceived, tunnel, adaptation: adapt, tags, barrel, sprayAngle: 0 }
     }
     if (!looksStrike && pz < 1.5) tags.push('골라냄')
-    return { outcome: 'BALL', swing, perceived, tunnel, tags, barrel, sprayAngle: 0 }
+    return { outcome: 'BALL', swing, perceived, tunnel, adaptation: adapt, tags, barrel, sprayAngle: 0 }
   }
 
   // 3) Timing: hitters sit on the fastball and adjust to what they've seen.
   const seenAvg = c.seenSpeeds.length ? c.seenSpeeds.slice(-3).reduce((a, n) => a + n, 0) / Math.min(3, c.seenSpeeds.length) : c.fastest
   let expect = lerp(c.fastest, seenAvg, c.seenSpeeds.length ? .38 : 0)
-  if (c.previous) expect = lerp(expect, c.previous.speed, tunnel * .6)
+  if (c.previous) expect = lerp(expect, c.previous.speed, tunnel * .8)
   if ((balls >= 2 && strikes < 2)) expect = lerp(expect, c.fastest, .5)
   const early = Math.min(.85, (expect - f.speed) / 30 * (recognized ? .45 : 1)) // + = out in front
-  const reaction = 143 + b.contact * 12 + diff.contactBonus * 30 + TIERS[c.tier ?? 0].reaction
-  const lateness = Math.max(0, f.speed - reaction) / 28
+  const reaction = 143 + b.contact * 12 + league.contact * 30 + league.reaction
+  // Extension: the ball gets on him faster than the gun says.
+  const lateness = Math.max(0, (f.perceivedSpeed ?? f.speed) - reaction) / 28
   const timing = Math.abs(early) + lateness * (1 - Math.max(0, early) * .5)
   const repeat = c.seenTypes.slice(-2).filter(t => t === f.pitch.id).length
-  const timingErr = Math.max(0, timing - repeat * .12 - repeatedZone * .06)
+  const timingErr = meatball ? 0 : Math.max(0, timing - repeat * .12 - repeatedZone * .06 - adapt * .25)
 
   // 4) Bat-to-ball.
   const missX = L.x - barrel.x, missY = L.y - barrel.y
@@ -378,21 +528,26 @@ export function resolvePitch(f: PitchFlight, c: AtBatContext): PitchResult {
   const weak = b.weakness === f.pitch.family ? -.1 : 0
   const protect = strikes === 2 ? .08 : 0
   const sittingFastball = (balls === 2 && strikes === 0 || balls === 3 && strikes === 1) && f.pitch.family === 'FASTBALL' && inZone(L)
-  const q = repeatedZone * .045 + (sittingFastball ? .1 : 0) - (backdoor ? .08 : 0) + b.contact * .55 + .36 + diff.contactBonus + late + protect + platoon + weak
-    - spatial * 1.0 - timingErr * .6 - outside * .85 - tunnel * .12 - eyeLevel * .06 - (highHeat ? .1 : 0) + gauss() * .16
+  // Steep downhill plane makes low, falling pitches drop off the table.
+  const plane = L.y > .4 && f.movement.y > .2 ? planeSteepness(f.releaseHeight) * .07 : 0
+  const q = repeatedZone * .045 + (sittingFastball ? .1 : 0) - (backdoor ? .08 : 0) + b.contact * .55 + .36 + league.contact + late + protect + platoon + weak
+    + adapt * .24 + conf * .07 + (meatball ? .32 : 0)
+    - spatial * 1.0 - timingErr * .6 - outside * .85 - tunnel * .2 - eyeLevel * .06 - (highHeat ? .1 + rise * .08 : 0) - plane + gauss() * .16
 
   if (f.breakLevel >= 50 && spatial > .25) tags.push('LATE BREAK')
-  if (tunnel > .45) tags.push('터널')
+  if (tunnel > .45) tags.push(tr.pair ? '하이-로우 터널' : '터널')
   if (eyeLevel && spatial > .25) tags.push('눈높이 흔들기')
-  if (highHeat && missY < -.25) tags.push('하이 패스트볼')
+  if (highHeat && missY < -.25) tags.push(rise > .4 ? '떠오르는 직구' : '하이 패스트볼')
+  if (plane && spatial > .25) tags.push('수직 낙차')
   if (!looksStrike || outside > .1) { if (!inZone(L)) tags.push('유인구') }
   if (early > .5) tags.push('타이밍 뺏음')
   else if (lateness > .35) tags.push('늦음')
   if (breakAway > .35 && same && spatial > .3) tags.push('도망가는 공')
+  if (adapt > .45) tags.push('읽혔다')
 
-  if (q < .12) return { outcome: 'SWINGING_STRIKE', swing, perceived, tunnel, tags, barrel, sprayAngle: 0 }
+  if (q < .12) return { outcome: 'SWINGING_STRIKE', swing, perceived, tunnel, adaptation: adapt, tags, barrel, sprayAngle: 0 }
   const spray = (side === 'R' ? -1 : 1) * clamp(early * .9 - lateness * .8 + gauss() * .35, -1, 1) // + pull = toward hitter's pull side
-  if (q < .44 || (timingErr > .45 && Math.random() < .6) || (strikes === 2 && q < .6 && Math.random() < .4)) return { outcome: 'FOUL', swing, perceived, tunnel, tags: tags.filter(t => t !== '유인구'), barrel, sprayAngle: spray }
+  if (q < .44 || (timingErr > .45 && Math.random() < .6) || (strikes === 2 && q < .6 && Math.random() < .4)) return { outcome: 'FOUL', swing, perceived, tunnel, adaptation: adapt, tags: tags.filter(t => t !== '유인구'), barrel, sprayAngle: spray }
 
   // 5) Quality of contact → batted ball.
   const center = 1 - clamp(Math.max(Math.abs(L.x), Math.abs(L.y)), 0, 1)
@@ -400,18 +555,19 @@ export function resolvePitch(f: PitchFlight, c: AtBatContext): PitchResult {
   const col = L.x < -.33 ? 0 : L.x > .33 ? 2 : 1, row = L.y < -.33 ? 0 : L.y > .33 ? 2 : 1
   const hot = inZone(L, .1) ? heat[row][col] * .22 : -.1
   const hanging = f.pitch.family !== 'FASTBALL' && L.y < .1 && Math.abs(L.x) < .6 ? .2 : 0
-  const jam = f.speed > 138 && inX > .45 && toInside(f.movement.x) > .1 ? .22 : inX > .8 ? .1 : 0
-  const exit = q + b.power * .3 + center * .25 + hot + hanging - jam + gauss() * .2 - .12
-  if (hanging > 0 && exit > .9) tags.push('실투')
+  const jam = !meatball && f.speed > 138 && inX > .45 && toInside(f.movement.x) > .1 ? .22 : inX > .8 ? .1 : 0
+  const exit = q + b.power * .3 + center * .25 + hot + hanging - jam + adapt * .25 + (meatball ? .38 : 0) + gauss() * .2 - .12
+  if (hanging > 0 && exit > .9 && !meatball) tags.push('실투')
   if (jam > .15) tags.push('먹힌 타구')
 
-  const launch = (perceived.y - L.y) * 1.3 - L.y * .5 + (f.pitch.id === 'SINKER' || f.pitch.id === 'SPLITTER' ? -.25 : 0) + gauss() * .32
+  const launch = (perceived.y - L.y) * 1.3 - L.y * .5 + (f.pitch.id === 'SINKER' || f.pitch.id === 'SPLITTER' ? -.25 : 0) + (meatball ? .35 : 0) + gauss() * .32
+  const hrPower = meatball ? .25 : .45
   let outcome: PitchOutcome
   if (launch < -.28) outcome = exit > 1.02 ? 'SINGLE' : exit > .98 && Math.random() < .5 ? 'SINGLE' : 'GROUND_OUT'
   else if (launch > .95) outcome = 'POP_OUT'
-  else if (launch > .42) outcome = exit > 1.2 && b.power > .45 ? 'HOME_RUN' : exit > 1.08 ? 'DOUBLE' : exit > .98 && Math.random() < .35 ? 'SINGLE' : 'FLY_OUT'
-  else outcome = exit > 1.16 && b.power > .6 && Math.random() < .35 ? 'HOME_RUN' : exit > 1.02 ? 'DOUBLE' : exit > .74 ? 'SINGLE' : 'LINE_OUT'
-  return { outcome, swing, perceived, tunnel, tags, barrel, sprayAngle: spray }
+  else if (launch > .42) outcome = exit > 1.2 && b.power > hrPower ? 'HOME_RUN' : exit > 1.08 ? 'DOUBLE' : exit > .98 && Math.random() < .35 ? 'SINGLE' : 'FLY_OUT'
+  else outcome = exit > 1.16 && b.power > (meatball ? .35 : .6) && Math.random() < (meatball ? .6 : .35) ? 'HOME_RUN' : exit > 1.02 ? 'DOUBLE' : exit > .74 ? 'SINGLE' : 'LINE_OUT'
+  return { outcome, swing, perceived, tunnel, adaptation: adapt, tags, barrel, sprayAngle: spray }
 }
 
 /** Short broadcast-style call for the batter's current approach. */
@@ -476,18 +632,20 @@ const CALLS: Record<PitchOutcome, Call> = {
 
 export function applyOutcome(g: GameState, f: PitchFlight, r: PitchResult): { game: GameState; events: PitchEvents; call: Call } {
   const o = r.outcome
+  const batter = g.lineup[g.batterIndex]
   const next: GameState = { ...g, bases: [...g.bases] as GameState['bases'], lineScore: [...g.lineScore], pitches: g.pitches + 1 }
   const ev: PitchEvents = { paEnded: false, strikeout: false, out: false, hit: false, walk: false, runs: 0, inningOver: false, reward: 0, mastery: 4 }
   let call = { ...CALLS[o] }
-  next.abLog = [...g.abLog, { pitch: f.pitch.id, speed: f.speed, x: f.landing.x, y: f.landing.y, px: r.barrel.x, py: r.barrel.y, call: CALLS[o].text, tag: r.tags[0] ?? '' }]
-  next.pitchLog = [...g.pitchLog, next.abLog[next.abLog.length - 1]]
+  const entry: PitchLog = { pitch: f.pitch.id, speed: f.speed, x: f.landing.x, y: f.landing.y, px: r.barrel.x, py: r.barrel.y, call: CALLS[o].text, tag: r.tags[0] ?? '', ...(f.meatball ? { meatball: true } : {}) }
+  next.abLog = [...g.abLog, entry]
+  next.pitchLog = [...(g.pitchLog ?? []), entry]
   const score = (runs: number) => { next.runsAgainst += runs; next.lineScore[next.lineScore.length - 1] += runs; ev.runs = runs }
 
   if (o === 'BALL') {
     next.balls++
     if (next.balls >= 4) { const a = advance(next.bases, 'BALL'); next.bases = a.bases; score(a.runs); ev.walk = true; next.walks++; next.inningWalks++; call = { text: '볼넷', tone: 'ball' } }
   } else if (o === 'HIT_BY_PITCH') {
-    const a = advance(next.bases, 'HIT_BY_PITCH'); next.bases = a.bases; score(a.runs); ev.walk = true; next.inningWalks++
+    const a = advance(next.bases, 'HIT_BY_PITCH'); next.bases = a.bases; score(a.runs); ev.walk = true; next.inningWalks++; next.hbp = (g.hbp ?? 0) + 1
   } else if (o === 'CALLED_STRIKE' || o === 'SWINGING_STRIKE') {
     next.strikes++; ev.reward = o === 'SWINGING_STRIKE' ? 3 : 2; ev.mastery = o === 'SWINGING_STRIKE' ? 10 : 7
     if (next.strikes >= 3) {
@@ -501,12 +659,23 @@ export function applyOutcome(g: GameState, f: PitchFlight, r: PitchResult): { ga
     ev.out = true; next.outs++; ev.reward = 10; ev.mastery = 12
   } else {
     const a = advance(next.bases, o); next.bases = a.bases; score(a.runs); ev.hit = true; next.hits++; next.inningHits++; ev.mastery = 2
+    if (o === 'HOME_RUN') next.homeRuns = (g.homeRuns ?? 0) + 1
   }
   if (ev.out) next.totalOuts++
   if (ev.out || ev.hit) next.atBats++
   ev.paEnded = ev.walk || ev.hit || ev.out
   if (ev.runs) call = { ...call, text: `${call.text} · ${ev.runs}실점` }
-  if (ev.paEnded) { next.balls = 0; next.strikes = 0; next.batterIndex = (next.batterIndex + 1) % 9; next.abLog = [] }
+
+  // Batter mood: every pitch nudges it, the plate appearance result moves it a lot.
+  const conf = (g.confidence ?? {})[batter.id] ?? 0
+  const delta = (CONFIDENCE_DELTA[o] ?? 0) + (ev.strikeout ? -.22 : 0) + (ev.walk && o === 'BALL' ? .15 : 0)
+  next.confidence = { ...(g.confidence ?? {}), [batter.id]: clamp(conf + delta, -1, 1) }
+
+  if (ev.paEnded) {
+    const pa: PlateAppearance = { inning: g.inning, pitches: next.abLog, result: call.text.split(' · ')[0] }
+    next.memory = { ...(g.memory ?? {}), [batter.id]: [...((g.memory ?? {})[batter.id] ?? []), pa] }
+    next.balls = 0; next.strikes = 0; next.batterIndex = (next.batterIndex + 1) % 9; next.abLog = []
+  }
   if (next.outs >= 3) {
     ev.inningOver = true; ev.reward += 30
     if (next.inningHits === 0 && next.inningWalks === 0) ev.reward += 25
@@ -526,10 +695,13 @@ export function closeInning(g: GameState): { game: GameState; summary: InningSum
     const runsFor = g.runsFor + ours
     if (g.inning >= 9) finished = runsFor > g.runsAgainst ? 'WIN' : runsFor < g.runsAgainst ? 'LOSS' : g.inning >= 12 ? 'TIE' : null
   }
+  const lead = g.runsFor + ours - g.runsAgainst
   const next: GameState = {
     ...g, runsFor: g.runsFor + ours, ourScore: [...g.ourScore, ours], outs: 0, balls: 0, strikes: 0, bases: [false, false, false],
     inningHits: 0, inningWalks: 0, abLog: [], over: finished !== null,
     inning: finished ? g.inning : g.inning + 1, lineScore: finished ? g.lineScore : [...g.lineScore, 0],
+    // Save situation: taking the mound for the 9th protecting a 1–3 run lead.
+    saveOpp: g.inning === 8 && !finished ? lead >= 1 && lead <= 3 : Boolean(g.saveOpp),
   }
   return { game: next, summary: { inning: g.inning, allowed, ours, clean, finished } }
 }

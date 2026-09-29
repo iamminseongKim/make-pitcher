@@ -21,7 +21,7 @@ const strats: Record<string, Strat> = {
     return Math.random() < .55 ? { type: 'FOUR_SEAM', x: away * r(.5, .9), y: r(-.9, -.4) } : { type: c.same ? 'SLIDER' : 'CHANGEUP', x: away * r(.5, .95), y: r(.5, .95) }
   },
 }
-function run(level: number, stratName: string, pas = 4000, diff: 'ROOKIE'|'PRO'|'LEGEND' = 'PRO') {
+function run(level: number, stratName: string, pas = 4000, tier = 2) {
   const p = prof(level, 'R', ['FOUR_SEAM', 'SLIDER', 'CHANGEUP'])
   const fastest = statSpeed(PITCHES[0], p.arsenal.FOUR_SEAM)
   let izs=0, izw=0, ozw=0, bip=0, fouls=0, byType: Record<string, [number, number]> = {}; let k = 0, bb = 0, h = 0, hr = 0, outs = 0, pitches = 0, swings = 0, whiffs = 0, chase = 0, oz = 0
@@ -35,7 +35,7 @@ function run(level: number, stratName: string, pas = 4000, diff: 'ROOKIE'|'PRO'|
       const def = PITCHES.find(d => d.id === s.type)!
       const power = Math.min(1, Math.max(0, .82 + (Math.random() - .5) * .22))
       const f = createFlight(def, p.arsenal[s.type], p, { x: s.x, y: s.y }, power)
-      const res = resolvePitch(f, { batter, pitcherHand: 'R', balls, strikes, inning: 1, difficulty: diff, previous: prev, seenSpeeds, seenTypes, fastest })
+      const res = resolvePitch(f, { batter, pitcherHand: 'R', balls, strikes, inning: 1, tier, previous: prev, seenSpeeds, seenTypes, fastest })
       const outZ = Math.abs(f.landing.x) > 1 || Math.abs(f.landing.y) > 1
       if (outZ) { oz++; if (res.swing) chase++ }
       if (res.swing) swings++
@@ -56,10 +56,10 @@ function run(level: number, stratName: string, pas = 4000, diff: 'ROOKIE'|'PRO'|
     }
   }
   const pct = (n: number, d = pas) => (n / d * 100).toFixed(1).padStart(5)
-  console.log(`${diff.padEnd(6)} L${String(level).padStart(2)} ${stratName.padEnd(8)} K%${pct(k)} BB%${pct(bb)} H%${pct(h)} HR%${pct(hr)} AVG ${(h / (pas - bb)).toFixed(3)} P/PA ${(pitches / pas).toFixed(1)} whiff/sw ${pct(whiffs, swings)} chase ${pct(chase, oz)} Zwhiff ${pct(izw, izs)} Owhiff ${pct(ozw, chase)} BABIP ${((h - hr) / (bip - hr)).toFixed(3)} foul/sw ${pct(fouls, swings)} ${Object.entries(byType).map(([t, v]) => t.slice(0, 4) + ':' + (v[1] / v[0] * 100).toFixed(0)).join(' ')}`)
+  console.log(`${['AMA', 'FUT', 'KBO', 'AAA', 'MLB'][tier].padEnd(4)} L${String(level).padStart(2)} ${stratName.padEnd(8)} K%${pct(k)} BB%${pct(bb)} H%${pct(h)} HR%${pct(hr)} AVG ${(h / (pas - bb)).toFixed(3)} P/PA ${(pitches / pas).toFixed(1)} whiff/sw ${pct(whiffs, swings)} chase ${pct(chase, oz)} Zwhiff ${pct(izw, izs)} Owhiff ${pct(ozw, chase)} BABIP ${((h - hr) / (bip - hr)).toFixed(3)} foul/sw ${pct(fouls, swings)} ${Object.entries(byType).map(([t, v]) => t.slice(0, 4) + ':' + (v[1] / v[0] * 100).toFixed(0)).join(' ')}`)
 }
 for (const lv of [5, 30, 70]) for (const s of Object.keys(strats)) run(lv, s)
-run(30, 'smart', 4000, 'ROOKIE'); run(30, 'smart', 4000, 'LEGEND')
+for (const tier of [0, 1, 3, 4]) run(30, 'smart', 4000, tier)
 // trajectory sanity: RHP release & break direction (catcher view: - = left of screen)
 const pr = prof(50, 'R', PITCHES.map(p => p.id)), pl = prof(50, 'L', PITCHES.map(p => p.id))
 for (const pp of [pr, pl]) for (const def of PITCHES) {

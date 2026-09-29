@@ -8,7 +8,7 @@ function test(type: PitchType, label: string, loc: (away: number) => { x: number
     const side = batterSide(b, 'R'); const away = side === 'R' ? 1 : -1
     const prev = prevType ? createFlight(PITCHES.find(d => d.id === prevType)!, p.arsenal[prevType], p, prevLoc!(away), .82) : null
     const f = createFlight(PITCHES.find(d => d.id === type)!, p.arsenal[type], p, loc(away), .82)
-    const r = resolvePitch(f, { batter: b, pitcherHand: 'R', balls: 1, strikes: 1, inning: 1, difficulty: 'PRO', previous: prev, seenSpeeds: prev ? [prev.speed] : [], seenTypes: prev ? [prevType!] : [], fastest: 150 })
+    const r = resolvePitch(f, { batter: b, pitcherHand: 'R', balls: 1, strikes: 1, inning: 1, tier: 2, previous: prev, seenSpeeds: prev ? [prev.speed] : [], seenTypes: prev ? [prevType!] : [], fastest: 150 })
     const k = side === 'R' ? 'same' : 'opp'
     if (r.swing) res[k].sw++
     if (r.outcome === 'SWINGING_STRIKE') res[k].wh++
