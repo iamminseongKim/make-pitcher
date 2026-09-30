@@ -227,6 +227,13 @@ export function trophyCase(seasons: Season[]) {
   return seasons.flatMap(s => [...(s.awards ?? []).map(a => ({ season: s.number, tier: s.tier, name: a, kind: 'award' as const })), ...(s.feats ?? []).map(f => ({ season: s.number, tier: s.tier, name: f, kind: 'feat' as const }))])
 }
 
+/** Our club in this league (index into its teams), or null until the pitcher picks one there. */
+export function clubIndex(clubs: Partial<Record<number, number>> | undefined, tier: number) {
+  const i = clubs?.[tier]
+  return typeof i === 'number' && i >= 0 && i < tierOf(tier).teams.length ? i : null
+}
+export const CLUB_COLORS = ['#5fa9ff', '#f5b643', '#eb627a', '#55c99b']
+
 export function gameTeam(g: GameState) {
   const names = tierOf(g.tier).teams
   return { name: names[g.opponent % names.length], short: names[g.opponent % names.length], color: ['#5fa9ff', '#f5b643', '#eb627a', '#55c99b', '#e65454'][TIERS.indexOf(tierOf(g.tier))] }

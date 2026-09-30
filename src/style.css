@@ -748,3 +748,51 @@ button:disabled { filter:saturate(.6) }
 .volume-row input[type=range]::-moz-range-thumb { width: 18px; height: 18px; border-radius: 50%; background: #eafcf6; border: 3px solid var(--action) }
 .volume-row.muted-row { opacity: .5 }
 .volume-row.muted-row b { color: var(--dim) }
+
+/* ───────── Sliding text for lines that don't fit (Marquee) ───────── */
+.marquee { display: block; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: clip !important }
+.marquee > span { display: inline-block; white-space: nowrap }
+.marquee.run { -webkit-mask-image: linear-gradient(90deg, #000 calc(100% - 12px), transparent); mask-image: linear-gradient(90deg, #000 calc(100% - 12px), transparent) }
+.marquee.run > span { animation: marquee var(--dur, 6s) ease-in-out infinite alternate }
+@keyframes marquee { 0%, 20% { transform: translateX(0) } 80%, 100% { transform: translateX(var(--shift)) } }
+.scout-line .marquee { flex: 1 }
+.teams span .marquee { font: inherit }
+.teams .mine span { color: #ffd98a }
+
+/* ───────── Pitcher name in the game header ───────── */
+.logo-type.player strong { max-width: 46vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: 'Noto Sans KR', var(--display); font-style: normal; font-size: 20px; line-height: 1.05; color: #fff; text-shadow: 0 0 14px #ffb40044 }
+
+/* ───────── Club picker ───────── */
+.club-sheet h2 { margin: 6px 0 4px }
+.club-grid { display: grid; gap: 8px; margin-top: 14px }
+.club { display: flex; align-items: center; gap: 10px; min-height: 52px; padding: 0 14px; border-radius: 12px; border: 1px solid var(--line-2); background: var(--panel); color: var(--text); text-align: left }
+.club i { width: 6px; height: 26px; border-radius: 3px; background: var(--club) }
+.club b { flex: 1; font-size: 16px; font-weight: 900 }
+.club svg { color: var(--muted) }
+.club:active { border-color: var(--club); background: color-mix(in srgb, var(--club) 16%, var(--panel)) }
+
+/* ───────── Phone: bigger field, tighter pitching controls ───────── */
+@media (max-width: 699px) {
+  .stadium-card { container-type: size }
+  /* Fill the card's height and let up to ~8% of each side (stands only) fall outside. */
+  .stadium-canvas { top: 0; bottom: 0; left: 50%; right: auto; margin: auto 0; width: auto; height: min(100%, 128cqw); max-width: none; max-height: none; transform: translateX(-50%) }
+  .scorebug { height: 46px; margin-bottom: 6px }
+  .status-strip { margin-bottom: 6px }
+  .strip-button { padding: 4px 9px }
+  .pitch-bar { margin: 6px 0 }
+  .pitch-chip { height: 40px }
+  .pitch-chip span { font-size: 12.5px }
+  .pitch-chip small { font-size: 11px }
+  .control-card { padding: 7px 10px 9px }
+  .pitch-tactics button, .focus-trigger { min-height: 32px }
+  .effort-switch button { padding: 5px 9px }
+  .focus-trigger { font-size: 11px }
+  .tactics-hint { font-size: 9.5px; margin: 3px 0 3px }
+  .callout { height: 22px }
+  .callout b { font-size: 16px }
+  .callout span { font-size: 11px }
+  .metrics { height: 20px; margin: 1px 0 0 }
+  .metrics > span { height: 18px; line-height: 18px; font-size: 12px }
+  .gauge { height: 18px; margin-top: 5px }
+  .pitch-button { height: 46px; margin-top: 7px; font-size: 20px }
+}

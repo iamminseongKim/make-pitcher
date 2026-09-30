@@ -12,9 +12,11 @@ export interface Settings {
   details: boolean
   mode: PlayMode
   tutorialDone: boolean
+  /** Camera: umpire (behind the catcher) or broadcast (TV center-field camera behind the pitcher). */
+  view: 'umpire' | 'broadcast'
 }
 export const SETTINGS_KEY = 'ace-project-settings-v1'
-export const DEFAULT_SETTINGS: Settings = { bgmVolume: 50, sfxVolume: 80, sound: true, haptics: true, zone: true, heat: false, memory: true, details: false, mode: 'highlight', tutorialDone: false }
+export const DEFAULT_SETTINGS: Settings = { bgmVolume: 50, sfxVolume: 80, sound: true, haptics: true, zone: true, heat: false, memory: true, details: false, mode: 'highlight', tutorialDone: false, view: 'umpire' }
 export function loadSettings(): Settings {
   try {
     const { bgm: _oldBgmToggle, ...saved } = JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}')

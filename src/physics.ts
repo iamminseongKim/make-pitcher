@@ -1,6 +1,6 @@
 import { traitActive, type Trait, type Effort } from './arcade'
 import { ageEffects } from './retirement'
-import { ARM_SLOTS, breakScale, clamp, dispersion, lerp, statSpeed, sweetSpot, type Grade, type PitchDefinition, type PitchStat, type PitcherProfile } from './game'
+import { ARM_SLOTS, breakScale, clamp, dispersion, lerp, statSpeed, sweetSpot, type ArmSlot, type Grade, type PitchDefinition, type PitchStat, type PitcherProfile } from './game'
 
 /* ───────────────────────── Pitcher body ───────────────────────── */
 
@@ -31,7 +31,7 @@ export function physiqueCost(height: number) {
 export const planeSteepness = (releaseHeight: number) => clamp((releaseHeight - 1.45) / .45, 0, 1)
 /** Four-seam ride multiplier: backspin axis is purest over the top, and a taller frame adds carry. */
 function rideMultiplier(p: PitcherProfile) {
-  const slot = { OVERHAND: 1.25, THREE_QUARTER: 1, SIDEARM: .7, SUBMARINE: .45 }[p.armSlot]
+  const slot = { OVERHAND: 1.35, THREE_QUARTER: 1, SIDEARM: .6, SUBMARINE: .3 }[p.armSlot]
   return slot * (1 + (p.height - 185) / 200)
 }
 
@@ -41,6 +41,8 @@ export interface PitchFlight {
   trait?: Trait
   effort?: Effort
   focused?: boolean
+  /** Arm slot that threw it (shapes the path). */
+  slot?: ArmSlot
   pitch: PitchDefinition
   speed: number
   /** What the hitter's clock feels: extension shortens the effective distance. */
@@ -77,7 +79,7 @@ function movementFor(pitch: PitchDefinition, stat: PitchStat, profile: PitcherPr
   const side = profile.hand === 'R' ? 1 : -1
   const scale = breakScale(stat.breakLevel)
   // Lower arm slots trade vertical drop for horizontal run.
-  const flat = profile.armSlot === 'SIDEARM' ? .25 : profile.armSlot === 'SUBMARINE' ? .4 : profile.armSlot === 'OVERHAND' ? -.12 : 0
+  const flat = profile.armSlot === 'SIDEARM' ? .4 : profile.armSlot === 'SUBMARINE' ? .6 : profile.armSlot === 'OVERHAND' ? -.2 : 0
   const ride = pitch.id === 'FOUR_SEAM' ? rideMultiplier(profile) : 1 - flat * .6
   return { x: (pitch.moveX / 65) * scale * side * (1 + flat), y: (pitch.moveY / 65) * scale * ride }
 }
@@ -158,7 +160,7 @@ export function createFlight(pitch: PitchDefinition, stat: PitchStat, profile: P
   speed = Math.round(speed * 10) / 10
   const b = body(profile, speed), ivb = ivbCm(movement.y)
   return {
-    trait, effort: options.effort, focused: options.focused, pitch, speed, perceivedSpeed: b.perceivedSpeed, grade: q.grade, duration: b.duration, target, landing,
+    trait, effort: options.effort, focused: options.focused, slot: profile.armSlot, pitch, speed, perceivedSpeed: b.perceivedSpeed, grade: q.grade, duration: b.duration, target, landing,
     release: releasePoint(profile), movement, startedAt: performance.now(), control: stat.controlLevel, breakLevel: stat.breakLevel, power,
     timingError: q.error, meatball: q.meatball, ivb, vaa: approachAngle(b.releaseHeight, b.extension, speed, landing.y, ivb), extension: b.extension, releaseHeight: b.releaseHeight,
   }
@@ -168,7 +170,7 @@ export function createPreviewFlight(pitch: PitchDefinition, stat: PitchStat, pro
   const speed = Math.round((statSpeed(pitch, stat) - ageEffects(profile.age ?? 25).veloLoss) * 10) / 10
   const b = body(profile, speed), movement = movementFor(pitch, stat, profile), ivb = ivbCm(movement.y)
   return {
-    trait: traitActive(stat), pitch, speed, perceivedSpeed: b.perceivedSpeed, grade: 'PERFECT', duration: b.duration, target, landing: target,
+    trait: traitActive(stat), slot: profile.armSlot, pitch, speed, perceivedSpeed: b.perceivedSpeed, grade: 'PERFECT', duration: b.duration, target, landing: target,
     release: releasePoint(profile), movement, startedAt: 0, control: stat.controlLevel, breakLevel: stat.breakLevel, power: SWEET_CENTER,
     timingError: 0, meatball: false, ivb, vaa: approachAngle(b.releaseHeight, b.extension, speed, target.y, ivb), extension: b.extension, releaseHeight: b.releaseHeight,
   }
@@ -178,8 +180,11 @@ export function createPreviewFlight(pitch: PitchDefinition, stat: PitchStat, pro
 export const movementProgress = (f: PitchFlight, t: number) => Math.pow(clamp(t, 0, 1), 2 + f.pitch.late * 2 + breakScale(f.breakLevel) * .7)
 export function pointOnFlight(f: PitchFlight, progress: number) {
   const t = clamp(progress, 0, 1), bend = movementProgress(f, t)
-  const gravity = .16 + (f.pitch.id === 'CURVE' ? .18 : 0)
-  return { x: lerp(f.release.x, f.landing.x, t) + f.movement.x * (bend - t),
+  const shape = f.slot ? ARM_SLOTS[f.slot] : ARM_SLOTS.THREE_QUARTER
+  const gravity = shape.hop + (f.pitch.id === 'CURVE' ? .18 : 0)
+  // Low slots sweep out toward the arm side and come back across the plate (crossfire).
+  const bow = shape.bow * Math.sign(f.release.x) * t * (1 - t)
+  return { x: lerp(f.release.x, f.landing.x, t) + f.movement.x * (bend - t) + bow,
     y: lerp(f.release.y, f.landing.y, t) + f.movement.y * (bend - t) - gravity * t * (1 - t), z: MOUND_TO_PLATE * (1 - t) }
 }
 

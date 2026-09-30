@@ -37,6 +37,8 @@ export interface PitcherProfile {
   startAge: number
   arsenal: Record<PitchType, PitchStat>
   created: boolean
+  /** Club picked in each league (tier → index in TIERS[tier].teams). Picked on arrival. */
+  clubs?: Partial<Record<number, number>>
 }
 
 export interface PitchDefinition {
@@ -67,11 +69,15 @@ export const PITCHES: PitchDefinition[] = [
 ]
 export const pitchById = (id: PitchType) => PITCHES.find(p => p.id === id)!
 
-export const ARM_SLOTS: Record<ArmSlot, { label: string; angle: string; releaseY: number; width: number }> = {
-  OVERHAND: { label: '오버핸드', angle: '12시', releaseY: -.48, width: .10 },
-  THREE_QUARTER: { label: '쓰리쿼터', angle: '10시 / 2시', releaseY: -.35, width: .23 },
-  SIDEARM: { label: '사이드암', angle: '9시 / 3시', releaseY: -.10, width: .38 },
-  SUBMARINE: { label: '언더핸드', angle: '8시 / 4시', releaseY: .12, width: .46 },
+/**
+ * Release point (zone units, catcher view) and path shape per arm slot.
+ * hop: upward hump of the path (a submarine ball climbs, then falls) · bow: outward sweep toward the arm side.
+ */
+export const ARM_SLOTS: Record<ArmSlot, { label: string; angle: string; releaseY: number; width: number; hop: number; bow: number }> = {
+  OVERHAND: { label: '오버핸드', angle: '12시', releaseY: -1.2, width: .1, hop: 0, bow: 0 },
+  THREE_QUARTER: { label: '쓰리쿼터', angle: '10시 / 2시', releaseY: -.7, width: .45, hop: .16, bow: .25 },
+  SIDEARM: { label: '사이드암', angle: '9시 / 3시', releaseY: .1, width: 1.05, hop: .6, bow: 1 },
+  SUBMARINE: { label: '언더핸드', angle: '8시 / 4시', releaseY: 1.4, width: .75, hop: 1.6, bow: .5 },
 }
 
 export const clamp = (n: number, min: number, max: number) => Math.max(min, Math.min(max, n))
@@ -234,18 +240,19 @@ export interface GameState {
 
 /** Fixed rivals per league (index = tier): 교타 · 장타 · 선구안. */
 const RIVAL_NAMES = [['강태산', '윤지혁', '서도윤'], ['백승호', '마준혁', '남궁현'], ['차민규', '석대호', '육성재'], ['Tony Alvarez', 'Brett Kowalski', 'Daniel Ito'], ['Marco Delacruz', 'Jake Holloway', 'Shohei Kanda']]
-export function newGame(prev?: GameState, tier = 0): GameState {
+export function newGame(prev?: GameState, tier = 0, myClub?: number): GameState {
   tier = clamp(Math.floor(tier), 0, TIERS.length - 1)
-  // Rotate within this league's own teams; never face the same club twice in a row.
-  const clubs = TIERS[tier].teams.length
-  const opponent = prev && prev.tier === tier ? (prev.opponent % clubs + 1 + Math.floor(Math.random() * (clubs - 1))) % clubs : Math.floor(Math.random() * clubs)
+  // Rotate within this league's other teams (never our own club); never face the same club twice in a row.
+  const others = TIERS[tier].teams.map((_, i) => i).filter(i => i !== myClub)
+  const fresh = others.filter(i => !(prev && prev.tier === tier && i === prev.opponent))
+  const opponent = pick(fresh.length ? fresh : others)
   const rivalArchive = { ...(prev?.rivalArchive ?? {}) }
   if (prev) for (const b of prev.lineup.filter(b => b.id.startsWith('rival-'))) {
     const played = prev.memory[b.id] ?? []
     if (played.length) rivalArchive[b.id] = played.slice(-3)
   }
-  const rivalId = `rival-${tier}-${opponent % 3}`
-  const rival = opponent % 3
+  const rival = Math.max(0, others.indexOf(opponent)) % 3
+  const rivalId = `rival-${tier}-${rival}`
   const rivalNames = RIVAL_NAMES[tier]
   const lineup = makeLineup(TIERS[tier].strength, tier >= 3, [rivalNames[rival]])
   lineup[3] = { ...lineup[3], id: rivalId, name: rivalNames[rival], bats: rival === 0 ? 'L' : 'R', zone: rival === 1 ? 'HIGH' : 'LOW', weakness: rival === 2 ? 'NONE' : 'OFFSPEED', contact: rival === 0 ? .92 : .73, power: rival === 1 ? .94 : .65, eye: rival === 2 ? .95 : .58, aggression: rival === 1 ? .9 : .5 }

@@ -11,11 +11,12 @@ export function LogoMark({ size = 34 }: { size?: number }) {
   </svg>
 }
 
-export function Logo({ sub }: { sub?: string }) {
+/** `title` replaces the wordmark (in-game header shows the pitcher's name). */
+export function Logo({ sub, title }: { sub?: string; title?: string }) {
   return <div className="logo">
     <LogoMark />
-    <div className="logo-type">
-      <strong>ACE<span>PROJECT</span></strong>
+    <div className={title ? 'logo-type player' : 'logo-type'}>
+      <strong>{title ?? <>ACE<span>PROJECT</span></>}</strong>
       {sub && <small>{sub}</small>}
     </div>
   </div>

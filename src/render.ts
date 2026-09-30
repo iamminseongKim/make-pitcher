@@ -1,14 +1,30 @@
 import { ARM_SLOTS, TUNNEL_POINT, clamp, dispersion, pointOnFlight, type Hand, type PitchFlight, type PitchLog, type PitcherProfile, type PlateAppearance, PITCHES } from './game'
 
 export const STAGE = { width: 390, height: 432, zoneX: 195, zoneY: 232, zoneW: 124, zoneH: 136 }
-const ZX = (x: number) => STAGE.zoneX + x * STAGE.zoneW / 2
-const ZY = (y: number) => STAGE.zoneY + y * STAGE.zoneH / 2
+/**
+ * Camera. umpire = behind the catcher (default). broadcast = TV center-field camera behind the pitcher:
+ * the pitcher's back in the foreground, the hitter and catcher far away, left/right mirrored.
+ */
+export type CameraView = 'umpire' | 'broadcast'
+const VIEWS: Record<CameraView, { cx: number; cy: number; w: number; h: number; mirror: number }> = {
+  umpire: { cx: STAGE.zoneX, cy: STAGE.zoneY, w: STAGE.zoneW, h: STAGE.zoneH, mirror: 1 },
+  broadcast: { cx: 195, cy: 200, w: 66, h: 74, mirror: -1 },
+}
+let view: CameraView = 'umpire'
+const ZX = (x: number) => VIEWS[view].cx + VIEWS[view].mirror * x * VIEWS[view].w / 2
+const ZY = (y: number) => VIEWS[view].cy + y * VIEWS[view].h / 2
+/** Canvas point → zone units for a camera (inverse of ZX/ZY; used for aiming taps). */
+export function canvasToZone(cam: CameraView, x: number, y: number) {
+  const v = VIEWS[cam]
+  return { x: (x - v.cx) / (v.w / 2) * v.mirror, y: (y - v.cy) / (v.h / 2) }
+}
 
 export type SwingKind = 'idle' | 'swing' | 'take' | 'hbp'
 export interface BatterAnim { kind: SwingKind; at: number; contact: boolean; barrel: { x: number; y: number } }
 export interface BattedBall { at: number; spray: number; type: 'GROUND' | 'LINE' | 'FLY' | 'HR' | 'FOUL' | 'POP'; from: { x: number; y: number } }
 
 export interface RenderScene {
+  view?: CameraView
   profile: PitcherProfile
   strikeoutChance?: boolean
   batterSide: Hand
@@ -19,6 +35,8 @@ export interface RenderScene {
   previewFlight: PitchFlight | null
   tunnel: number
   flightProgress: number
+  /** 0→1 while the release meter charges (the pitcher coils into his arm slot). */
+  charge?: number
   showZone: boolean
   heat: number[][] | null
   log: PitchLog[]
@@ -34,7 +52,35 @@ function roundRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: numbe
   ctx.fillStyle = fill; ctx.beginPath(); ctx.roundRect(x, y, w, h, r); ctx.fill()
 }
 
+/*
+ * Broadcast camera: the pitcher is close to the lens (drawn big, from behind, feet off the bottom edge)
+ * and offset to his glove side so the plate stays visible; the hitter is ~18 m away and small.
+ */
+const PITCHER_SCALE = 1.45, PITCHER_BASE = 440
+const pitcherX = (righty: boolean) => righty ? 122 : 268
+/** Release hand in the pitcher's own (unscaled) drawing space. release: zone units, catcher view (righty = negative x). */
+function handLocal(release: { x: number; y: number }) {
+  return { x: pitcherX(release.x <= 0) - release.x * 52 - Math.sign(release.x) * 8, y: 336 + release.y * 44 }
+}
+/** Release hand on the canvas. */
+function broadcastHand(release: { x: number; y: number }) {
+  const h = handLocal(release), ax = pitcherX(release.x <= 0)
+  return { x: ax + (h.x - ax) * PITCHER_SCALE, y: PITCHER_BASE + (h.y - PITCHER_BASE) * PITCHER_SCALE }
+}
+const CAM = 8, RUN = 16.6
+/** 0 at the hand → 1 at the plate. The ball recedes from the camera, so it covers most of the screen early. */
+const recede = (t: number) => (1 / CAM - 1 / (CAM + RUN * t)) / (1 / CAM - 1 / (CAM + RUN))
+function broadcastBall(f: PitchFlight, t: number) {
+  const p = pointOnFlight(f, t), hand = broadcastHand(f.release), d = recede(clamp(t, 0, 1))
+  return {
+    x: ZX(p.x) + (hand.x - ZX(f.release.x)) * (1 - d),
+    y: ZY(p.y) + (hand.y - ZY(f.release.y)) * (1 - d),
+    radius: 2.4 + 10 * Math.pow(1 - d, 1.5),
+  }
+}
+
 export function projectedBall(f: PitchFlight, t: number) {
+  if (view === 'broadcast') return broadcastBall(f, t)
   const p = pointOnFlight(f, t)
   const depth = Math.pow(t, 1.35)
   return {
@@ -101,47 +147,229 @@ function drawScenery(ctx: CanvasRenderingContext2D, now: number) {
   }
 }
 
+/* ───────────── Arm action ───────────── */
+
+type P = { x: number; y: number }
+/**
+ * Hand path per arm slot, relative to the throwing shoulder in arm lengths
+ * (x: + toward the throwing-arm side, y: + down). cock = loaded position while the meter charges,
+ * via/finish = the follow-through after release (quadratic curve).
+ */
+const SWING: Record<keyof typeof ARM_SLOTS, { cock: [number, number]; via: [number, number]; finish: [number, number] }> = {
+  // over the top: hand high behind the head → straight down across the body
+  OVERHAND: { cock: [.3, -.95], via: [-.1, .2], finish: [-.65, 1.05] },
+  // three-quarter: diagonal from high-outside to the glove-side knee
+  THREE_QUARTER: { cock: [.9, -.45], via: [0, .05], finish: [-.8, .85] },
+  // sidearm: a flat sweep at shoulder height
+  SIDEARM: { cock: [1.1, .15], via: [0, -.1], finish: [-1, .3] },
+  // submarine: the hand dips below the knee and scoops up across the chest
+  SUBMARINE: { cock: [.5, 1.15], via: [.15, .95], finish: [-.65, -.5] },
+}
+const quad = (a: P, b: P, c: P, k: number) => ({ x: (1 - k) * (1 - k) * a.x + 2 * (1 - k) * k * b.x + k * k * c.x, y: (1 - k) * (1 - k) * a.y + 2 * (1 - k) * k * b.y + k * k * c.y })
+/** Throwing hand: set → cocked while charging → release → slot-shaped follow-through. Draws the swing blur. */
+function throwingArm(ctx: CanvasRenderingContext2D, slot: keyof typeof ARM_SLOTS, arm: number, shoulder: P, release: P, setPos: P, L: number, charge: number, flight: PitchFlight | null, t: number) {
+  const sw = SWING[slot], at = ([x, y]: [number, number]) => ({ x: shoulder.x + arm * x * L, y: shoulder.y + y * L })
+  const cock = at(sw.cock)
+  let hand: P
+  if (flight) {
+    const k = clamp(t * 3.2, 0, 1), e = 1 - (1 - k) * (1 - k)
+    hand = quad(release, at(sw.via), at(sw.finish), e)
+    // Swing blur: the path from the cocked position through release to the hand, fading out.
+    if (k < .75) {
+      ctx.save()
+      ctx.globalAlpha = .5 * (1 - k / .75); ctx.strokeStyle = '#ffffff'; ctx.lineWidth = L * .32; ctx.lineCap = 'round'
+      ctx.beginPath(); ctx.moveTo(cock.x, cock.y)
+      const mid = { x: (cock.x + release.x) / 2 + arm * L * .25, y: (cock.y + release.y) / 2 }
+      for (let i = 1; i <= 8; i++) { const q = quad(cock, mid, release, i / 8); ctx.lineTo(q.x, q.y) }
+      for (let i = 1; i <= 12; i++) { const q = quad(release, at(sw.via), at(sw.finish), e * i / 12); ctx.lineTo(q.x, q.y) }
+      ctx.stroke(); ctx.restore()
+    }
+  } else {
+    const c = clamp(charge * 2.4, 0, 1), e = c * c * (3 - 2 * c)
+    hand = { x: setPos.x + (cock.x - setPos.x) * e, y: setPos.y + (cock.y - setPos.y) * e }
+  }
+  // Elbow: bends outward from the straight line (shoulder → hand).
+  const dx = hand.x - shoulder.x, dy = hand.y - shoulder.y, len = Math.hypot(dx, dy) || 1
+  const bendOut = Math.max(0, L * 1.05 - len) * .6
+  const elbow = { x: shoulder.x + dx / 2 + (dy / len) * bendOut * arm, y: shoulder.y + dy / 2 - (dx / len) * bendOut * arm }
+  ctx.beginPath(); ctx.moveTo(shoulder.x, shoulder.y); ctx.lineTo(elbow.x, elbow.y); ctx.lineTo(hand.x, hand.y); ctx.stroke()
+  return hand
+}
+
+/* ───────────── Broadcast camera (behind the pitcher) ───────────── */
+
+let broadcastCache: HTMLCanvasElement | null = null
+function drawBroadcastScenery(ctx: CanvasRenderingContext2D, now: number) {
+  const w = STAGE.width, h = STAGE.height
+  if (!broadcastCache) {
+    const c = document.createElement('canvas'); c.width = w * 2; c.height = h * 2
+    const g = c.getContext('2d')!; g.scale(2, 2)
+    // Stands behind home plate
+    const sky = g.createLinearGradient(0, 0, 0, 100)
+    sky.addColorStop(0, '#070b16'); sky.addColorStop(1, '#121b2c')
+    g.fillStyle = sky; g.fillRect(0, 0, w, 100)
+    for (let row = 0; row < 7; row++) for (let col = 0; col < 60; col++) {
+      const x = col * 6.8 + (row % 2) * 3.4 - 4, y = 10 + row * 9.5
+      const hue = (col * 41 + row * 83) % 100
+      g.fillStyle = hue < 8 ? '#ffb40077' : hue < 14 ? '#22d3ee66' : hue < 22 ? '#f5f8fc44' : '#34435e99'
+      g.beginPath(); g.arc(x, y, 2.2, 0, Math.PI * 2); g.fill()
+      g.fillRect(x - 2.4, y + 2, 4.8, 3.6)
+    }
+    // Backstop wall + ad boards
+    g.fillStyle = '#0f1d31'; g.fillRect(0, 78, w, 24)
+    const ads = ['ACE', 'K-ZONE', '155', 'PITCH LAB', 'ACE']
+    g.font = '800 8px system-ui'; g.textAlign = 'center'
+    ads.forEach((a, i) => { roundRect(g, i * 80 + 4, 84, 72, 11, 2, i % 2 ? '#0e2c3d' : '#2a2210'); g.fillStyle = i % 2 ? '#22d3eecc' : '#ffb400cc'; g.fillText(a, i * 80 + 40, 92.5) })
+    // Grass with mow stripes, widening toward the camera
+    const grass = g.createLinearGradient(0, 102, 0, h)
+    grass.addColorStop(0, '#16603a'); grass.addColorStop(1, '#1f8049')
+    g.fillStyle = grass; g.fillRect(0, 102, w, h - 102)
+    for (let i = 0; i < 12; i++) { const y = 102 + Math.pow(i / 12, 1.4) * (h - 102), y2 = 102 + Math.pow((i + 1) / 12, 1.4) * (h - 102); g.fillStyle = i % 2 ? '#ffffff07' : '#00000012'; g.fillRect(0, y, w, y2 - y) }
+    // Dirt around home plate
+    g.fillStyle = '#7b5d3f'; g.beginPath(); g.ellipse(195, 250, 132, 36, 0, 0, Math.PI * 2); g.fill()
+    g.fillStyle = '#8e6d4a'; g.beginPath(); g.ellipse(195, 252, 92, 22, 0, 0, Math.PI * 2); g.fill()
+    // Foul lines run from the plate out toward the camera
+    g.strokeStyle = '#f3f1e680'; g.lineWidth = 2
+    g.beginPath(); g.moveTo(170, 258); g.lineTo(-60, 372); g.moveTo(220, 258); g.lineTo(450, 372); g.stroke()
+    // Batter's boxes and the plate (the point faces away from this camera)
+    g.strokeStyle = '#f3f1e6aa'; g.lineWidth = 1.6
+    g.strokeRect(116, 240, 40, 22); g.strokeRect(234, 240, 40, 22)
+    g.fillStyle = '#f2f4ee'; g.beginPath(); g.moveTo(166, 258); g.lineTo(224, 258); g.lineTo(224, 254); g.lineTo(195, 248); g.lineTo(166, 254); g.closePath(); g.fill()
+    // Mound in the foreground
+    g.fillStyle = '#8a6a48'; g.beginPath(); g.ellipse(195, 452, 210, 72, 0, 0, Math.PI * 2); g.fill()
+    g.fillStyle = '#a3825b'; g.beginPath(); g.ellipse(190, 446, 130, 38, 0, 0, Math.PI * 2); g.fill()
+    broadcastCache = c
+  }
+  ctx.drawImage(broadcastCache, 0, 0, w, h)
+  for (const x of [26, 364]) {
+    const halo = ctx.createRadialGradient(x, 6, 0, x, 6, 80)
+    halo.addColorStop(0, `rgba(255,248,220,${.22 + Math.sin(now / 900 + x) * .02})`); halo.addColorStop(1, 'rgba(255,248,220,0)')
+    ctx.fillStyle = halo; ctx.fillRect(x - 80, 0, 160, 90)
+  }
+}
+
+/** Umpire and catcher behind the plate; the catcher sets his mitt at the called target. */
+function drawCatcher(ctx: CanvasRenderingContext2D, target: { x: number; y: number }) {
+  ctx.save()
+  ctx.lineCap = 'round'
+  // umpire (behind the catcher)
+  ctx.fillStyle = '#1b2436'; ctx.beginPath(); ctx.ellipse(195, 200, 21, 27, 0, 0, Math.PI * 2); ctx.fill()
+  ctx.fillStyle = '#b89478'; ctx.beginPath(); ctx.arc(195, 166, 10, 0, Math.PI * 2); ctx.fill()
+  ctx.fillStyle = '#10151f'; ctx.beginPath(); ctx.arc(195, 163, 10.5, Math.PI, 0); ctx.fill(); ctx.fillRect(186, 166, 18, 5)
+  // catcher: crouched, chest protector, shin guards
+  ctx.strokeStyle = '#27324a'; ctx.lineWidth = 9
+  ctx.beginPath(); ctx.moveTo(185, 238); ctx.lineTo(176, 256); ctx.moveTo(205, 238); ctx.lineTo(214, 256); ctx.stroke()
+  ctx.fillStyle = '#2e3d5a'; ctx.beginPath(); ctx.ellipse(195, 226, 21, 20, 0, 0, Math.PI * 2); ctx.fill()
+  ctx.fillStyle = '#3d5078'; ctx.beginPath(); ctx.ellipse(195, 224, 13, 15, 0, 0, Math.PI * 2); ctx.fill()
+  ctx.fillStyle = '#39465e'; ctx.beginPath(); ctx.arc(195, 199, 10.5, 0, Math.PI * 2); ctx.fill()
+  ctx.strokeStyle = '#9aa6bb'; ctx.lineWidth = 1
+  for (const y of [196, 200, 204]) { ctx.beginPath(); ctx.moveTo(189, y); ctx.lineTo(201, y); ctx.stroke() }
+  // mitt arm (his glove hand is on screen-right: he faces the camera)
+  const mitt = { x: clamp(ZX(target.x), 155, 235), y: clamp(ZY(target.y), 165, 250) }
+  ctx.strokeStyle = '#2e3d5a'; ctx.lineWidth = 6
+  ctx.beginPath(); ctx.moveTo(207, 214); ctx.lineTo(mitt.x, mitt.y); ctx.stroke()
+  ctx.fillStyle = '#7a4f2a'; ctx.beginPath(); ctx.arc(mitt.x, mitt.y, 8, 0, Math.PI * 2); ctx.fill()
+  ctx.fillStyle = '#5e3b1e'; ctx.beginPath(); ctx.arc(mitt.x, mitt.y, 4.5, 0, Math.PI * 2); ctx.fill()
+  ctx.restore()
+}
+
+/** The pitcher seen from behind: name on the jersey, arm slot visible in the delivery. */
+function drawPitcherBack(ctx: CanvasRenderingContext2D, profile: PitcherProfile, flight: PitchFlight | null, t: number, charge = 0) {
+  // From behind, a righty's throwing arm is on screen-right.
+  const arm = profile.hand === 'R' ? 1 : -1
+  const slot = ARM_SLOTS[profile.armSlot]
+  const release = handLocal({ x: -arm * slot.width, y: slot.releaseY - (profile.height - 185) / 90 })
+  const follow = flight ? clamp(t * 4, 0, 1) : 0
+  const bend = flight ? { OVERHAND: 0, THREE_QUARTER: .25, SIDEARM: .6, SUBMARINE: 1 }[profile.armSlot] * (1 - follow * .6) : 0
+  const lean = -arm * bend * 16, dip = bend * 16
+  const X = pitcherX(arm === 1)
+  ctx.save()
+  // Near the camera: scale the figure up around its feet.
+  ctx.translate(X, PITCHER_BASE); ctx.scale(PITCHER_SCALE, PITCHER_SCALE); ctx.translate(-X, -PITCHER_BASE)
+  ctx.lineCap = 'round'; ctx.lineJoin = 'round'
+  // rubber
+  ctx.fillStyle = '#f1efe4'; ctx.fillRect(X - 22, 436, 44, 4)
+  // legs: the glove-side leg strides toward the plate during the delivery
+  ctx.strokeStyle = '#e9ecef'; ctx.lineWidth = 13
+  ctx.beginPath()
+  ctx.moveTo(X - arm * 9 + lean * .3, 392 + dip * .3); ctx.lineTo(X - arm * (14 + follow * 8), 414 - follow * 14); ctx.lineTo(X - arm * (16 + follow * 10), 440 - follow * 22)
+  ctx.moveTo(X + arm * 9 + lean * .3, 392 + dip * .3); ctx.lineTo(X + arm * 15, 418); ctx.lineTo(X + arm * 17, 446)
+  ctx.stroke()
+  // torso: jersey back with the pitcher's name
+  const tx = X + lean * .6, ty = 364 + dip * .6
+  ctx.save(); ctx.translate(tx, ty); ctx.rotate(-arm * bend * .4 + arm * follow * .12)
+  ctx.fillStyle = '#eef1f4'; ctx.beginPath(); ctx.roundRect(-24, -30, 48, 58, 14); ctx.fill()
+  ctx.fillStyle = '#1f3a66'; ctx.fillRect(-24, 22, 48, 6)
+  ctx.textAlign = 'center'; ctx.fillStyle = '#1f3a66'
+  ctx.font = "900 8.5px 'Noto Sans KR', system-ui"; ctx.fillText(profile.name.toUpperCase(), 0, -14, 42)
+  ctx.font = "italic 900 22px 'Barlow Condensed', system-ui"; ctx.fillText('1', 0, 10)
+  ctx.restore()
+  // head from behind: cap and neck
+  const hx = X + lean, hy = 318 + dip
+  ctx.fillStyle = '#c9a283'; ctx.fillRect(hx - 5, hy + 4, 10, 9)
+  ctx.fillStyle = '#1f3a66'; ctx.beginPath(); ctx.arc(hx, hy, 12, 0, Math.PI * 2); ctx.fill()
+  ctx.fillStyle = '#2b4c80'; ctx.beginPath(); ctx.arc(hx, hy - 2, 3, 0, Math.PI * 2); ctx.fill()
+  // glove arm
+  const gs = { x: X - arm * 19 + lean * .5, y: 340 + dip * .6 }
+  const glove = { x: X - arm * (30 - follow * 16), y: 362 + follow * 12 }
+  ctx.strokeStyle = '#e9ecef'; ctx.lineWidth = 8
+  ctx.beginPath(); ctx.moveTo(gs.x, gs.y); ctx.lineTo(glove.x, glove.y); ctx.stroke()
+  ctx.fillStyle = '#6b4a2b'; ctx.beginPath(); ctx.arc(glove.x, glove.y, 7, 0, Math.PI * 2); ctx.fill()
+  // throwing arm: set position → release point of this arm slot → follow-through across the body
+  const shoulder = { x: X + arm * 19 + lean * .5, y: 340 + dip * .6 }
+  const hand = throwingArm(ctx, profile.armSlot, arm, shoulder, release, { x: X + arm * (22 + slot.width * 12), y: 360 + slot.releaseY * 10 }, 40, charge, flight, t)
+  ctx.fillStyle = '#d9b99a'; ctx.beginPath(); ctx.arc(hand.x, hand.y, 4.5, 0, Math.PI * 2); ctx.fill()
+  ctx.restore()
+}
+
 /* ───────────── Figures ───────────── */
 
-function drawPitcher(ctx: CanvasRenderingContext2D, profile: PitcherProfile, flight: PitchFlight | null, t: number) {
+function drawPitcher(ctx: CanvasRenderingContext2D, profile: PitcherProfile, flight: PitchFlight | null, t: number, charge = 0) {
   // Catcher view: the throwing arm of a righty is on screen-left.
   const arm = profile.hand === 'R' ? -1 : 1
   const slot = ARM_SLOTS[profile.armSlot]
   const release = { x: 195 + arm * slot.width * 28, y: 132 + (slot.releaseY - (profile.height - 185) / 90) * 22 }
   const follow = flight ? clamp(t * 4, 0, 1) : 0
+  // Lower slots bend the torso away from the throwing arm (submarine: a deep crouch) at release.
+  const bend = flight ? { OVERHAND: 0, THREE_QUARTER: .25, SIDEARM: .6, SUBMARINE: 1 }[profile.armSlot] * (1 - follow * .6) : 0
+  const lean = -arm * bend * 6, dip = bend * 8
   ctx.save()
   ctx.lineCap = 'round'; ctx.strokeStyle = '#e9ecef'; ctx.fillStyle = '#e9ecef'
   // legs
   ctx.lineWidth = 5
-  ctx.beginPath(); ctx.moveTo(191, 152); ctx.lineTo(186 - follow * 4, 171); ctx.moveTo(199, 152); ctx.lineTo(205 + follow * 3, 171); ctx.stroke()
+  ctx.beginPath(); ctx.moveTo(191 + lean * .3, 152 + dip * .3); ctx.lineTo(186 - follow * 4, 171); ctx.moveTo(199 + lean * .3, 152 + dip * .3); ctx.lineTo(205 + follow * 3, 171); ctx.stroke()
   // body
-  ctx.beginPath(); ctx.ellipse(195, 141, 8.5, 13, arm * follow * .2, 0, Math.PI * 2); ctx.fill()
-  ctx.fillStyle = '#1f3a66'; ctx.beginPath(); ctx.ellipse(195, 145, 8.5, 5, 0, 0, Math.PI); ctx.fill()
+  ctx.beginPath(); ctx.ellipse(195 + lean * .6, 141 + dip * .6, 8.5, 13, arm * follow * .2 - arm * bend * .45, 0, Math.PI * 2); ctx.fill()
+  ctx.fillStyle = '#1f3a66'; ctx.beginPath(); ctx.ellipse(195 + lean * .4, 145 + dip * .4, 8.5, 5, 0, 0, Math.PI); ctx.fill()
   // head + cap
-  ctx.fillStyle = '#d9b99a'; ctx.beginPath(); ctx.arc(195, 124, 5.2, 0, Math.PI * 2); ctx.fill()
-  ctx.fillStyle = '#1f3a66'; ctx.beginPath(); ctx.arc(195, 122.5, 5.4, Math.PI, 0); ctx.fill(); ctx.fillRect(191, 122, 8, 1.8)
+  const hx = 195 + lean, hy = 124 + dip
+  ctx.fillStyle = '#d9b99a'; ctx.beginPath(); ctx.arc(hx, hy, 5.2, 0, Math.PI * 2); ctx.fill()
+  ctx.fillStyle = '#1f3a66'; ctx.beginPath(); ctx.arc(hx, hy - 1.5, 5.4, Math.PI, 0); ctx.fill(); ctx.fillRect(hx - 4, hy - 2, 8, 1.8)
   // glove arm
+  const gx = 195 - arm * 6 + lean * .5, gy = 134 + dip * .6
   ctx.strokeStyle = '#e9ecef'; ctx.lineWidth = 3.6
-  ctx.beginPath(); ctx.moveTo(195 - arm * 6, 134); ctx.lineTo(195 - arm * (12 - follow * 6), 140 + follow * 4); ctx.stroke()
-  ctx.fillStyle = '#6b4a2b'; ctx.beginPath(); ctx.arc(195 - arm * (12 - follow * 6), 141 + follow * 4, 3.4, 0, Math.PI * 2); ctx.fill()
-  // throwing arm: cocked → release → follow-through
-  const hand = flight
-    ? { x: release.x + (195 - arm * 4 - release.x) * follow, y: release.y + (156 - release.y) * follow }
-    : { x: 195 + arm * 13, y: 138 }
+  ctx.beginPath(); ctx.moveTo(gx, gy); ctx.lineTo(gx - arm * (6 - follow * 6), gy + 6 + follow * 4); ctx.stroke()
+  ctx.fillStyle = '#6b4a2b'; ctx.beginPath(); ctx.arc(gx - arm * (6 - follow * 6), gy + 7 + follow * 4, 3.4, 0, Math.PI * 2); ctx.fill()
+  // throwing arm: cocked → release point of this arm slot → follow-through
+  const shoulder = { x: 195 + arm * 6 + lean * .5, y: 133 + dip * .6 }
   ctx.strokeStyle = '#e9ecef'; ctx.lineWidth = 3.6
-  ctx.beginPath(); ctx.moveTo(195 + arm * 6, 133); ctx.lineTo(hand.x, hand.y); ctx.stroke()
+  // set position already hints the arm slot
+  throwingArm(ctx, profile.armSlot, arm, shoulder, release, { x: 195 + arm * (8 + slot.width * 9), y: 136 + slot.releaseY * 7 }, 18, charge, flight, t)
   ctx.restore()
 }
 
 function drawBatter(ctx: CanvasRenderingContext2D, side: Hand, anim: BatterAnim, color: string, now: number) {
-  const dir = side === 'R' ? 1 : -1 // direction toward the plate
-  const ox = side === 'R' ? 100 : 290, oy = 372
+  // Umpire view: righties stand screen-left. Broadcast: mirrored, farther away, drawn at the plate's depth.
+  const g = view === 'broadcast' ? { x: side === 'R' ? 262 : 128, y: 262, k: .8 } : { x: side === 'R' ? 100 : 290, y: 372, k: 1 }
+  const dir = g.x < 195 ? 1 : -1 // direction toward the plate
+  const ox = 0, oy = 0
   const since = now - anim.at
   const idleBob = Math.sin(now / 420) * 1.2
   let lean = 0, flinch = 0
   if (anim.kind === 'take') flinch = Math.max(0, 1 - since / 260) * 3
   if (anim.kind === 'hbp') flinch = Math.max(0, 1 - since / 500) * 10 * Math.sin(since / 30)
   ctx.save()
+  ctx.translate(g.x, g.y); ctx.scale(g.k, g.k)
   ctx.lineCap = 'round'; ctx.lineJoin = 'round'
   // Swing progress: load → through the zone (at 0) → follow-through.
   const swingT = anim.kind === 'swing' ? clamp((since + 170) / 380, 0, 1) : 0
@@ -170,7 +398,7 @@ function drawBatter(ctx: CanvasRenderingContext2D, side: Hand, anim: BatterAnim,
   // hands and bat
   const idleHands = { x: torso.x - dir * 8, y: torso.y - 26 + idleBob }
   const contactHands = { x: torso.x + dir * 16, y: torso.y - 4 }
-  const barrel = { x: ZX(anim.barrel.x), y: ZY(anim.barrel.y) }
+  const barrel = { x: (ZX(anim.barrel.x) - g.x) / g.k, y: (ZY(anim.barrel.y) - g.y) / g.k }
   const a0 = Math.atan2(-60, -dir * 22)
   const a1 = Math.atan2(barrel.y - contactHands.y, barrel.x - contactHands.x)
   const a2 = a1 + dir * 2.3
@@ -207,12 +435,12 @@ const angleDiff = (a: number, b: number) => { let d = b - a; while (d > Math.PI)
 /* ───────────── Zone & overlays ───────────── */
 
 function drawZone(ctx: CanvasRenderingContext2D, scene: RenderScene) {
-  const left = ZX(-1), top = ZY(-1), w = STAGE.zoneW, h = STAGE.zoneH
+  const left = Math.min(ZX(-1), ZX(1)), top = ZY(-1), w = VIEWS[view].w, h = VIEWS[view].h
   if (scene.heat) {
     for (let r = 0; r < 3; r++) for (let c = 0; c < 3; c++) {
       const v = scene.heat[r][c]
       ctx.fillStyle = v > 0 ? `rgba(255,86,70,${Math.min(.42, v * .5)})` : `rgba(70,140,255,${Math.min(.38, -v * .5)})`
-      ctx.fillRect(left + c * w / 3, top + r * h / 3, w / 3, h / 3)
+      ctx.fillRect(Math.min(ZX(-1 + c * 2 / 3), ZX(-1 + (c + 1) * 2 / 3)), top + r * h / 3, w / 3, h / 3)
     }
   } else { ctx.fillStyle = '#ffffff08'; ctx.fillRect(left, top, w, h) }
   if (!scene.showZone) return
@@ -348,6 +576,18 @@ function drawBatted(ctx: CanvasRenderingContext2D, b: BattedBall, now: number) {
   const k = clamp((now - b.at) / dur, 0, 1)
   if (k >= 1) return
   const sx = ZX(b.from.x), sy = ZY(b.from.y)
+  if (view === 'broadcast') {
+    // Fair balls fly out toward the center-field camera (grow), pops and fouls go up and away (shrink).
+    const ex = 195 - b.spray * (b.type === 'FOUL' ? 300 : 210)
+    const ey = { HR: 580, FLY: 470, LINE: 430, GROUND: 405, POP: 30, FOUL: 120 }[b.type]
+    const arc = { HR: 60, FLY: 90, LINE: 12, GROUND: 0, POP: 120, FOUL: 30 }[b.type]
+    const grow = { HR: 16, FLY: 11, LINE: 8, GROUND: 5, POP: 0, FOUL: 0 }[b.type]
+    const x = sx + (ex - sx) * k, y = sy + (ey - sy) * k - Math.sin(k * Math.PI) * arc
+    const r = Math.max(1.5, 3.5 + grow * k * k - (grow ? 0 : 2 * k))
+    ctx.fillStyle = '#fffdf4'; ctx.shadowColor = '#fff'; ctx.shadowBlur = 10
+    ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill(); ctx.shadowBlur = 0
+    return
+  }
   const far = b.type === 'HR' ? -60 : b.type === 'GROUND' ? 180 : b.type === 'POP' ? 60 : b.type === 'FOUL' ? 20 : 105
   const ex = 195 + b.spray * (b.type === 'FOUL' ? 260 : 150), ey = far
   const arc = b.type === 'GROUND' ? 0 : b.type === 'POP' ? 180 : b.type === 'LINE' ? 40 : 120
@@ -365,7 +605,7 @@ function drawResult(ctx: CanvasRenderingContext2D, result: RenderScene['result']
   const big = result.tone === 'k' || result.tone === 'hr'
   ctx.save()
   ctx.globalAlpha = alpha
-  ctx.translate(195, 138); ctx.scale(pop, pop)
+  ctx.translate(195, view === 'broadcast' ? 96 : 138); ctx.scale(pop, pop)
   ctx.textAlign = 'center'
   ctx.font = `italic 900 ${big ? 44 : 34}px 'Barlow Condensed', system-ui`
   const color = { k: '#ffb400', hr: '#ff4d5e', hit: '#ffcf70', out: '#22d3ee', ball: '#f5f8fc', strike: '#f5f8fc', foul: '#f5f8fc', miss: '#ff4d5e' }[result.tone] ?? '#fff'
@@ -377,28 +617,45 @@ function drawResult(ctx: CanvasRenderingContext2D, result: RenderScene['result']
 
 export function renderScene(ctx: CanvasRenderingContext2D, scene: RenderScene) {
   const { flight, flightProgress: t, now } = scene
+  view = scene.view ?? 'umpire'
   ctx.clearRect(0, 0, STAGE.width, STAGE.height)
   ctx.save()
   const impactAge = (now - scene.result.at) / 1000
   const punch = !window.matchMedia('(prefers-reduced-motion: reduce)').matches && scene.result.tone === 'k' ? Math.max(0, 1 - impactAge / 1.2) : 0
   const zoom = 1 + punch * .10
-  ctx.translate(STAGE.zoneX, STAGE.zoneY); ctx.scale(zoom, zoom); ctx.translate(-STAGE.zoneX, -STAGE.zoneY)
-  drawScenery(ctx, now)
-  drawPitcher(ctx, scene.profile, flight, t)
-  drawZone(ctx, scene)
-  if (scene.memory?.length) drawMemory(ctx, scene.memory)
-  drawLog(ctx, scene.log, Boolean(flight))
-  if (!flight && scene.previewFlight) drawPreview(ctx, scene)
-  if (!flight) drawCrosshair(ctx, scene)
-  // The batter stands in front of the zone plane; the ball passes in front of him near the plate.
-  drawBatter(ctx, scene.batterSide, scene.anim, scene.teamColor, now)
-  if (flight && t <= 1) drawBall(ctx, flight, t)
-  if (flight?.meatball && t <= 1) { drawWarning(ctx, 195, 104, now); drawWarning(ctx, ZX(flight.target.x), ZY(flight.target.y) - 20, now, 8) }
+  const V = VIEWS[view]
+  ctx.translate(V.cx, V.cy); ctx.scale(zoom, zoom); ctx.translate(-V.cx, -V.cy)
+  if (view === 'broadcast') {
+    drawBroadcastScenery(ctx, now)
+    drawCatcher(ctx, flight ? flight.target : scene.target)
+    drawBatter(ctx, scene.batterSide, scene.anim, scene.teamColor, now)
+    drawZone(ctx, scene)
+    if (scene.memory?.length) drawMemory(ctx, scene.memory)
+    drawLog(ctx, scene.log, Boolean(flight))
+    if (!flight && scene.previewFlight) drawPreview(ctx, scene)
+    if (!flight) drawCrosshair(ctx, scene)
+    // The pitcher is closest to the camera; the ball leaves his hand and flies away from us.
+    drawPitcherBack(ctx, scene.profile, flight, t, scene.charge)
+    if (flight && t <= 1) drawBall(ctx, flight, t)
+    if (flight?.meatball && t <= 1) { const h = broadcastHand(flight.release); drawWarning(ctx, h.x, h.y - 18, now); drawWarning(ctx, ZX(flight.target.x), ZY(flight.target.y) - 16, now, 7) }
+  } else {
+    drawScenery(ctx, now)
+    drawPitcher(ctx, scene.profile, flight, t, scene.charge)
+    drawZone(ctx, scene)
+    if (scene.memory?.length) drawMemory(ctx, scene.memory)
+    drawLog(ctx, scene.log, Boolean(flight))
+    if (!flight && scene.previewFlight) drawPreview(ctx, scene)
+    if (!flight) drawCrosshair(ctx, scene)
+    // The batter stands in front of the zone plane; the ball passes in front of him near the plate.
+    drawBatter(ctx, scene.batterSide, scene.anim, scene.teamColor, now)
+    if (flight && t <= 1) drawBall(ctx, flight, t)
+    if (flight?.meatball && t <= 1) { drawWarning(ctx, 195, 104, now); drawWarning(ctx, ZX(flight.target.x), ZY(flight.target.y) - 20, now, 8) }
+  }
   if (scene.batted) drawBatted(ctx, scene.batted, now)
   if (punch > 0) {
     ctx.strokeStyle = `rgba(255,180,0,${punch})`; ctx.lineWidth = 2 + punch * 3
-    ctx.strokeRect(ZX(-1), ZY(-1), STAGE.zoneW, STAGE.zoneH)
-    ctx.beginPath(); ctx.arc(STAGE.zoneX, STAGE.zoneY, 20 + impactAge * 90, 0, Math.PI * 2); ctx.stroke()
+    ctx.strokeRect(Math.min(ZX(-1), ZX(1)), ZY(-1), V.w, V.h)
+    ctx.beginPath(); ctx.arc(V.cx, V.cy, 20 + impactAge * 90, 0, Math.PI * 2); ctx.stroke()
   }
   ctx.restore()
   drawResult(ctx, scene.result, now)
