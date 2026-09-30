@@ -1,4 +1,5 @@
 import './arcade-regression'
+import './commute-regression'
 import assert from 'node:assert/strict'
 import {
   PITCHES, createFlight, createPreviewFlight, defaultProfile, pointOnFlight, newGame, applyOutcome, closeInning, loadSave, SAVE_KEY, resolvePitch,
@@ -243,7 +244,7 @@ assert(hitsOver(6000, () => f, { balls: 3, strikes: 1, history: Array(4).fill(g.
 
 /* ── Promotion / call-up / demotion ── */
 {
-  const line = (tier: number, games: number, outs: number, runs: number, extra: object = {}) => ({ ...newSeason(tier, 1), games, outs, runs, strikeouts: Math.round(outs / 3), walks: Math.round(outs / 15), ...extra })
+  const line = (tier: number, games: number, outs: number, runs: number, extra: object = {}) => ({ ...newSeason(tier, 1, 1, 30, 30), games, outs, runs, strikeouts: Math.round(outs / 3), walks: Math.round(outs / 15), ...extra })
   const good = promotionStatus(line(0, 30, 540, 50)) // ERA 2.50
   assert(good.canPromote && !good.callUp && !good.demote)
   assert(!promotionStatus(line(0, 30, 540, 100)).canPromote, 'ERA 5.00 does not promote from Amateur')
@@ -254,6 +255,10 @@ assert(hitsOver(6000, () => f, { balls: 3, strikes: 1, history: Array(4).fill(g.
   assert(!promotionStatus(line(0, 30, 300, 150)).demote, 'no demotion below Amateur')
   assert(!promotionStatus(line(4, 30, 540, 10)).canPromote && promotionStatus(line(4, 30, 540, 10)).top)
   assert.equal(callUpSchedule(line(1, 12, 180, 10)), 18); assert.equal(callUpSchedule(line(1, 28, 180, 10)), 5)
+  // 20-start seasons scale the counting bars by 2/3 (100 IP → 66.2 IP).
+  const short = (outs: number, runs: number) => ({ ...newSeason(0, 1), games: 20, outs, runs, strikeouts: Math.round(outs / 3), walks: Math.round(outs / 15) })
+  assert(promotionStatus(short(200, 18)).canPromote && !promotionStatus(short(190, 10)).canPromote, '20-start year needs 66.2 IP')
+  assert.equal(newSeason().scheduled, 20)
   assert(seasonDone({ ...newSeason(), games: 30 }) && !seasonDone({ ...newSeason(1, 2, 1, 18), games: 17 }))
   // A call-up keeps the calendar year: two records, one pro year.
   assert.equal(serviceTime([{ ...newSeason(1, 1, 1), games: 12 }], newSeason(2, 2, 1, 18)).label, 'Year 1 Pro')

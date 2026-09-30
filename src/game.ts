@@ -112,16 +112,6 @@ export interface Batter {
 const SURNAMES = ['김', '이', '박', '최', '정', '강', '조', '윤', '장', '임', '한', '오', '서', '신', '권', '황', '안', '송', '류', '홍', '전', '고', '문', '양', '손', '배', '백', '허', '노', '하']
 const GIVEN_A = ['민', '현', '준', '지', '성', '도', '태', '재', '승', '우', '진', '영', '동', '상', '건', '한', '주', '규', '시', '은']
 const GIVEN_B = ['호', '석', '우', '혁', '빈', '수', '민', '훈', '원', '찬', '재', '윤', '환', '결', '율', '범', '겸', '후', '엽', '규']
-export const TEAMS = [
-  { name: '인천 해풍', short: '해풍', color: '#e2574c' },
-  { name: '대구 청룡', short: '청룡', color: '#4f8cff' },
-  { name: '부산 갈매기즈', short: '갈매기', color: '#f2a93b' },
-  { name: '광주 호랑이', short: '호랑이', color: '#e84a5f' },
-  { name: '수원 성곽', short: '성곽', color: '#3fbf8f' },
-  { name: '창원 공룡', short: '공룡', color: '#8a7dff' },
-  { name: '대전 불꽃', short: '불꽃', color: '#ff7a30' },
-  { name: '서울 쌍둥이', short: '쌍둥이', color: '#d6d6e0' },
-]
 
 function batterFor(order: number, strength: number): Batter {
   // Lineup archetypes: table-setters, heart of the order, bottom of the order.
@@ -146,8 +136,19 @@ function batterFor(order: number, strength: number): Batter {
   }
 }
 
-export function makeLineup(strength: number): Batter[] {
-  return Array.from({ length: 9 }, (_, i) => batterFor(i + 1, strength))
+const US_FIRST = ['James', 'Luis', 'Marcus', 'Diego', 'Alex', 'Kenji', 'Carlos', 'Ryan', 'Evan', 'Tyler', 'Jose', 'Mason', 'Andre', 'Noah', 'Rafael', 'Cody', 'Hunter', 'Miguel', 'Jordan', 'Owen', 'Yuki', 'Trey', 'Mateo', 'Brandon']
+const US_LAST = ['Carter', 'Rivera', 'Reed', 'Santos', 'Brooks', 'Mori', 'Vega', 'Hayes', 'Cole', 'Walker', 'Ortiz', 'Bennett', 'Ramos', 'Fisher', 'Delgado', 'Price', 'Tanaka', 'Morales', 'Hughes', 'Castillo', 'Ward', 'Foster', 'Navarro', 'Sullivan']
+const batterName = (english: boolean) => english ? `${pick(US_FIRST)} ${pick(US_LAST)}` : pick(SURNAMES) + pick(GIVEN_A) + pick(GIVEN_B)
+/** Nine hitters with no duplicate names (and none clashing with `taken`, e.g. the rival). */
+export function makeLineup(strength: number, english = false, taken: string[] = []): Batter[] {
+  const used = new Set(taken)
+  return Array.from({ length: 9 }, (_, i) => {
+    const b = batterFor(i + 1, strength)
+    let name = batterName(english)
+    for (let n = 0; used.has(name) && n < 50; n++) name = batterName(english)
+    used.add(name)
+    return { ...b, name }
+  })
 }
 
 /** A switch hitter always takes the platoon advantage. */
@@ -227,19 +228,22 @@ export interface GameState {
   over: boolean
 }
 
-const US_NAMES = ['James Carter', 'Luis Rivera', 'Marcus Reed', 'Diego Santos', 'Alex Brooks', 'Kenji Mori', 'Carlos Vega', 'Ryan Hayes', 'Evan Cole']
+/** Fixed rivals per league (index = tier): 교타 · 장타 · 선구안. */
+const RIVAL_NAMES = [['강태산', '윤지혁', '서도윤'], ['백승호', '마준혁', '남궁현'], ['차민규', '석대호', '육성재'], ['Tony Alvarez', 'Brett Kowalski', 'Daniel Ito'], ['Marco Delacruz', 'Jake Holloway', 'Shohei Kanda']]
 export function newGame(prev?: GameState, tier = 0): GameState {
-  const opponent = prev ? (prev.opponent + 1 + Math.floor(Math.random() * (TEAMS.length - 1))) % TEAMS.length : Math.floor(Math.random() * TEAMS.length)
   tier = clamp(Math.floor(tier), 0, TIERS.length - 1)
+  // Rotate within this league's own teams; never face the same club twice in a row.
+  const clubs = TIERS[tier].teams.length
+  const opponent = prev && prev.tier === tier ? (prev.opponent % clubs + 1 + Math.floor(Math.random() * (clubs - 1))) % clubs : Math.floor(Math.random() * clubs)
   const rivalArchive = { ...(prev?.rivalArchive ?? {}) }
   if (prev) for (const b of prev.lineup.filter(b => b.id.startsWith('rival-'))) {
     const played = prev.memory[b.id] ?? []
     if (played.length) rivalArchive[b.id] = played.slice(-3)
   }
   const rivalId = `rival-${tier}-${opponent % 3}`
-  const lineup = makeLineup(TIERS[tier].strength).map((b, i) => ({ ...b, name: tier < 3 ? b.name : US_NAMES[i] }))
-  const rivalNames = ['강태산', '윤지혁', '서도윤']
   const rival = opponent % 3
+  const rivalNames = RIVAL_NAMES[tier]
+  const lineup = makeLineup(TIERS[tier].strength, tier >= 3, [rivalNames[rival]])
   lineup[3] = { ...lineup[3], id: rivalId, name: rivalNames[rival], bats: rival === 0 ? 'L' : 'R', zone: rival === 1 ? 'HIGH' : 'LOW', weakness: rival === 2 ? 'NONE' : 'OFFSPEED', contact: rival === 0 ? .92 : .73, power: rival === 1 ? .94 : .65, eye: rival === 2 ? .95 : .58, aggression: rival === 1 ? .9 : .5 }
   return {
     arcade: freshArcade(), rivalArchive,

@@ -1,5 +1,5 @@
 import type { ArmSlot, Hand, PitcherProfile } from './game'
-import { aggregate, eraOf, fipOf, formatIP, type Season } from './season'
+import { aggregate, eraOf, fipOf, formatIP, seasonScale, type Season } from './season'
 
 /* ───────────────────────── Age & aging curve ───────────────────────── */
 
@@ -61,9 +61,12 @@ export function hallOfFame(seasons: Season[]) {
   const c = aggregate(seasons)
   const mlbYears = new Set(seasons.filter(s => s.tier === 4 && s.games > 0).map(s => s.year)).size
   const honors: string[] = []
-  if (c.wins >= 150) honors.push(`통산 ${c.wins}승`)
-  if (c.strikeouts >= 2000) honors.push(`통산 ${c.strikeouts}K`)
-  if (mlbYears >= 3 && c.outs >= 1500 && eraOf(aggregate(seasons.filter(s => s.tier === 4))) <= 3) honors.push(`MLB ${mlbYears}시즌 ERA 3.00 이하`)
+  // Career bars scale with the season lengths actually played (20-start years → 2/3).
+  const played = seasons.filter(s => s.games > 0)
+  const k = played.length ? played.reduce((n, s) => n + seasonScale(s), 0) / played.length : 1
+  if (c.wins >= Math.round(150 * k)) honors.push(`통산 ${c.wins}승`)
+  if (c.strikeouts >= Math.round(2000 * k)) honors.push(`통산 ${c.strikeouts}K`)
+  if (mlbYears >= 3 && c.outs >= Math.round(1500 * k) && eraOf(aggregate(seasons.filter(s => s.tier === 4))) <= 3) honors.push(`MLB ${mlbYears}시즌 ERA 3.00 이하`)
   if (mlbYears >= 5) honors.push(`MLB ${mlbYears}시즌`)
   const count = (name: string) => seasons.filter(s => (s.awards ?? []).includes(name)).length
   if (count('사이영상') >= 2) honors.push(`사이영상 ${count('사이영상')}회`)

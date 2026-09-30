@@ -20,8 +20,10 @@ export const TIERS = [
 ] as const
 export type Tier = typeof TIERS[number]
 export const tierOf = (i: number | undefined): Tier => TIERS[Math.max(0, Math.min(TIERS.length - 1, Math.floor(i ?? 0)))]
-/** A full rotation turn: a starter takes the ball about 30 times a season. */
-export const SEASON_GAMES = 30
+/** Starts per season for new careers (short enough for commute play). */
+export const SEASON_GAMES = 20
+/** Counting thresholds (IP, W, K) were tuned for a 30-start year; they scale with season length. */
+export const BASE_SEASON_GAMES = 30
 
 /**
  * Leagues unlocked on this device, shared by every character: a fresh account always starts
@@ -50,13 +52,19 @@ export interface Season {
   feats?: string[]
   /** League awards won for this season (decided when the season is archived). */
   awards?: string[]
+  /** Full-season length this record belongs to (a call-up row keeps its parent's). Old saves: 30. */
+  length?: number
 }
-export const newSeason = (tier = 0, number = 1, year = number, scheduled = SEASON_GAMES): Season => ({ number, year, scheduled, tier, games: 0, wins: 0, losses: 0, saves: 0, outs: 0, runs: 0, hits: 0, walks: 0, hbp: 0, homeRuns: 0, strikeouts: 0, atBats: 0, pitches: 0, lastGameId: -1 })
+/** 1 for a 30-start year, 2/3 for a 20-start year. */
+export const seasonScale = (s: Pick<Season, 'length'>) => (s.length ?? BASE_SEASON_GAMES) / BASE_SEASON_GAMES
+export const newSeason = (tier = 0, number = 1, year = number, scheduled = SEASON_GAMES, length = SEASON_GAMES): Season => ({ number, year, scheduled, length, tier, games: 0, wins: 0, losses: 0, saves: 0, outs: 0, runs: 0, hits: 0, walks: 0, hbp: 0, homeRuns: 0, strikeouts: 0, atBats: 0, pitches: 0, lastGameId: -1 })
 /** Fills fields added after v2 so old saves keep loading. */
 export const normalizeSeason = (s: Partial<Season> | undefined, fallbackNumber = 1): Season => {
   const base = newSeason(0, fallbackNumber)
   const merged = { ...base, ...s }
-  return { ...merged, year: Number(merged.year) || merged.number, scheduled: Number(merged.scheduled) || SEASON_GAMES, tier: Math.max(0, Math.min(TIERS.length - 1, Math.floor(Number(merged.tier) || 0))) }
+  // Records saved before season length existed were 30-start years.
+  const length = Number(s?.length) || BASE_SEASON_GAMES
+  return { ...merged, length, year: Number(merged.year) || merged.number, scheduled: Number(merged.scheduled) || length, tier: Math.max(0, Math.min(TIERS.length - 1, Math.floor(Number(merged.tier) || 0))) }
 }
 
 export const gameWon = (g: GameState) => pitcherDecision(g) === 'W'
@@ -136,15 +144,17 @@ export function promotionStatus(s: Season): PromotionStatus {
   const tier = Math.max(0, Math.min(TIERS.length - 1, s.tier))
   const top = tier === TIERS.length - 1
   const t = PROMOTION_ERA[tier], era = eraOf(s), fip = fipOf(s)
+  const k = seasonScale(s)
+  const minOuts = Math.round(PROMOTION.minOuts * k), cuGames = Math.round(PROMOTION.callUpGames * k), cuOuts = Math.round(PROMOTION.callUpOuts * k), demoteOuts = Math.round(PROMOTION.demoteMinOuts * k)
   const fmt = (n: number) => Number.isFinite(n) ? n.toFixed(2) : '—'
   const season: Criterion[] = [
     { label: 'ERA', value: fmt(era), goal: `≤ ${t.toFixed(2)}`, met: era <= t },
     { label: 'FIP', value: fmt(fip), goal: `≤ ${t.toFixed(2)}`, met: fip <= t },
-    { label: 'IP', value: formatIP(s.outs), goal: `≥ ${PROMOTION.minOuts / 3}`, met: s.outs >= PROMOTION.minOuts },
+    { label: 'IP', value: formatIP(s.outs), goal: `≥ ${formatIP(minOuts)}`, met: s.outs >= minOuts },
   ]
   const callUpCriteria: Criterion[] = [
-    { label: '경기', value: String(s.games), goal: `≥ ${PROMOTION.callUpGames}`, met: s.games >= PROMOTION.callUpGames },
-    { label: 'IP', value: formatIP(s.outs), goal: `≥ ${PROMOTION.callUpOuts / 3}`, met: s.outs >= PROMOTION.callUpOuts },
+    { label: '경기', value: String(s.games), goal: `≥ ${cuGames}`, met: s.games >= cuGames },
+    { label: 'IP', value: formatIP(s.outs), goal: `≥ ${formatIP(cuOuts)}`, met: s.outs >= cuOuts },
     { label: 'ERA', value: fmt(era), goal: `≤ ${(t - PROMOTION.callUpMargin.era).toFixed(2)}`, met: era <= t - PROMOTION.callUpMargin.era },
     { label: 'FIP', value: fmt(fip), goal: `≤ ${(t - PROMOTION.callUpMargin.fip).toFixed(2)}`, met: fip <= t - PROMOTION.callUpMargin.fip },
   ]
@@ -152,39 +162,42 @@ export function promotionStatus(s: Season): PromotionStatus {
     top, threshold: t, season, callUpCriteria,
     canPromote: !top && season.every(c => c.met),
     callUp: !top && !seasonDone(s) && callUpCriteria.every(c => c.met),
-    demote: tier > 0 && s.outs >= PROMOTION.demoteMinOuts && era >= t + PROMOTION.demoteMargin,
+    demote: tier > 0 && s.outs >= demoteOuts && era >= t + PROMOTION.demoteMargin,
   }
 }
 /** Remaining starts after a call-up (at least five). */
-export const callUpSchedule = (s: Season) => Math.max(5, (s.scheduled ?? SEASON_GAMES) - s.games)
+export const callUpSchedule = (s: Season) => Math.max(Math.round(5 * seasonScale(s)), (s.scheduled ?? SEASON_GAMES) - s.games)
 
 /* ───────────────────────── League awards ───────────────────────── */
 
 interface AwardRule { name: string; test: (s: Season, era: number, fip: number) => boolean }
-const ip = (s: Season) => s.outs / 3
+/** Innings pitched, normalised to a 30-start year so one rule set fits every season length. */
+const ip = (s: Season) => s.outs / 3 / seasonScale(s)
+/** Wins / strikeouts, normalised the same way. */
+const n = (s: Season, v: number) => v / seasonScale(s)
 /** Awards fitting each level, judged on the season's line (a full 30-start year ≈ 180 IP). */
 export const AWARDS: AwardRule[][] = [
   [
-    { name: '아마추어 최우수 투수상', test: (s, era) => era <= 2.5 && ip(s) >= 100 && s.wins >= 10 },
-    { name: '아마추어 탈삼진왕', test: s => s.strikeouts >= 160 },
+    { name: '아마추어 최우수 투수상', test: (s, era) => era <= 2.5 && ip(s) >= 100 && n(s, s.wins) >= 10 },
+    { name: '아마추어 탈삼진왕', test: s => n(s, s.strikeouts) >= 160 },
   ],
   [
-    { name: '퓨처스리그 우수 투수상', test: (s, era) => era <= 2.8 && ip(s) >= 100 && s.wins >= 10 },
-    { name: '퓨처스리그 탈삼진왕', test: s => s.strikeouts >= 150 },
+    { name: '퓨처스리그 우수 투수상', test: (s, era) => era <= 2.8 && ip(s) >= 100 && n(s, s.wins) >= 10 },
+    { name: '퓨처스리그 탈삼진왕', test: s => n(s, s.strikeouts) >= 150 },
   ],
   [
-    { name: 'KBO 투수 골든글러브', test: (s, era) => era <= 3 && ip(s) >= 150 && s.wins >= 14 },
-    { name: 'KBO 최고 투수상', test: (s, era, fip) => era <= 2.4 && fip <= 3 && ip(s) >= 160 && s.strikeouts >= 170 },
-    { name: 'KBO 탈삼진왕', test: s => s.strikeouts >= 190 },
+    { name: 'KBO 투수 골든글러브', test: (s, era) => era <= 3 && ip(s) >= 150 && n(s, s.wins) >= 14 },
+    { name: 'KBO 최고 투수상', test: (s, era, fip) => era <= 2.4 && fip <= 3 && ip(s) >= 160 && n(s, s.strikeouts) >= 170 },
+    { name: 'KBO 탈삼진왕', test: s => n(s, s.strikeouts) >= 190 },
   ],
   [
     { name: '트리플A 올해의 투수', test: (s, era) => era <= 2.8 && ip(s) >= 130 },
     { name: '트리플A 올스타', test: (s, era) => era <= 3.3 && ip(s) >= 80 },
   ],
   [
-    { name: '사이영상', test: (s, era, fip) => era <= 2.6 && fip <= 3 && ip(s) >= 170 && (s.wins >= 15 || s.strikeouts >= 220) },
+    { name: '사이영상', test: (s, era, fip) => era <= 2.6 && fip <= 3 && ip(s) >= 170 && (n(s, s.wins) >= 15 || n(s, s.strikeouts) >= 220) },
     { name: 'MLB 올스타', test: (s, era) => era <= 3.2 && ip(s) >= 90 },
-    { name: 'MLB 탈삼진왕', test: s => s.strikeouts >= 230 },
+    { name: 'MLB 탈삼진왕', test: s => n(s, s.strikeouts) >= 230 },
   ],
 ]
 export function seasonAwards(s: Season): string[] {

@@ -1,6 +1,6 @@
 import { Challenge } from './Challenge'
 import { freshArcade, MISSIONS, performanceBonus, signatureText, traitActive, type Effort } from './arcade'
-import { sfx, disposeAudio } from './audio'
+import { sfx, disposeAudio, setBgm, setVolumes } from './audio'
 import { TIERS, FEAT_TP, gameFeat, seasonAwards, loadUnlockedTier, saveUnlockedTier, aggregate, callUpSchedule, promotionStatus, seasonDone as isSeasonDone, formatIP, newSeason, recordGame, seasonRates, gameTeam, serviceTime, tierOf, type Season } from './season'
 import { PitchChart } from './PitchChart'
 import { Creator } from './Creator'
@@ -9,7 +9,7 @@ import { Logo } from './Logo'
 import { LegacyHall, RetirementSheet } from './Legacy'
 import { AGE, RETIRE_LABEL, START_AGE, ageEffects, ageStage, buildRetired, legacyBonus, loadLegacy, retirementStatus, saveLegacy, type RetireReason, type RetiredPlayer } from './retirement'
 import { useEffect, useRef, useState, type CSSProperties, type PointerEvent } from 'react'
-import { Activity, ArrowLeft, ArrowRight, Check, CircleHelp, Crosshair, Eye, Flame, History, LockKeyhole, RotateCcw, Settings2, Sparkles, Trophy, Volume2, VolumeX, Zap } from 'lucide-react'
+import { Activity, ArrowLeft, ArrowRight, Check, CircleHelp, Crosshair, Eye, Flame, History, LockKeyhole, Music, RotateCcw, Settings as SettingsIcon, Settings2, Sparkles, Trophy, Volume2, VolumeX, Zap } from 'lucide-react'
 import {
   DECISION_LABEL, MEATBALL_MISS, MOOD_LABEL, SPECIAL_TP, STAMINA, PITCHES, SAVE_KEY, SWEET_CENTER, WEAK_LABEL, ZONE_LABEL,
   applyOutcome, batterAdaptation, bullpenFinish, canRefuseHook, fatigueAfter, needsHook, pitcherDecision, staminaCost, batterMindset, batterSide, breakScale, clamp, closeInning, createFlight, createPreviewFlight, defaultProfile,
@@ -18,12 +18,16 @@ import {
   type PitchLog, type PitchResult, type PitcherProfile, type PitchType, type StatKey,
 } from './game'
 import { renderScene, STAGE, type BatterAnim, type BattedBall } from './render'
+import { AUTO_TP, autoPlateAppearance, isKeyMoment } from './highlight'
+import { DAILY_POOL, loadDaily, loadSettings, newMilestones, openDay, progressDaily, recommendUpgrade, saveDaily, saveSettings, type DailyId, type Settings } from './meta'
 
-type Panel = 'none' | 'training' | 'career' | 'profile' | 'help' | 'legacy' | 'challenge' | 'mission'
+type Panel = 'none' | 'training' | 'career' | 'profile' | 'help' | 'legacy' | 'challenge' | 'mission' | 'daily' | 'settings'
 type Phase = 'ready' | 'charging' | 'flying' | 'result'
 const initial = loadSave()
 const IDLE: BatterAnim = { kind: 'idle', at: 0, contact: false, barrel: { x: 0, y: 0 } }
 const reducedMotion = () => window.matchMedia('(prefers-reduced-motion: reduce)').matches
+/** The day is opened (check-in paid) once per page load even under StrictMode's double effects. */
+let dayOpenedFor = ''
 
 const LABELS: Record<StatKey, { label: string; hint: string }> = {
   velocityLevel: { label: '구속', hint: '빠를수록 타자가 늦는다' },
@@ -64,10 +68,19 @@ function App() {
   const pitchMode = useRef({ effort: 'normal' as Effort, focused: false })
   const [phase, setPhase] = useState<Phase>('ready')
   const [callout, setCallout] = useState<{ main: string; sub: string; tone: string }>({ main: 'PLAY BALL', sub: '코스를 찍고 투구', tone: 'ready' })
-  const [soundOn, setSoundOn] = useState(true)
-  const [showZone, setShowZone] = useState(true)
-  const [scout, setScout] = useState(false)
-  const [showMemory, setShowMemory] = useState(true)
+  const [settings, setSettings] = useState<Settings>(loadSettings)
+  const set = <K extends keyof Settings>(k: K, v: Settings[K]) => setSettings(s => ({ ...s, [k]: v }))
+  const soundOn = settings.sound, setSoundOn = (v: boolean) => set('sound', v)
+  const showZone = settings.zone, setShowZone = (v: boolean) => set('zone', v)
+  const scout = settings.heat, setScout = (v: boolean) => set('heat', v)
+  const showMemory = settings.memory, setShowMemory = (v: boolean) => set('memory', v)
+  const buzz = (pattern: number | number[]) => { if (settings.haptics) navigator.vibrate?.(pattern) }
+  const [daily, setDaily] = useState(loadDaily)
+  const [welcome, setWelcome] = useState<{ checkIn: number; streak: number } | null>(null)
+  const [toast, setToast] = useState<{ title: string; sub: string; tone: string; key: number } | null>(null)
+  const [autoFeed, setAutoFeed] = useState<{ lines: string[]; key: number } | null>(null)
+  const [sessionTP, setSessionTP] = useState(0)
+  const [aimedOnce, setAimedOnce] = useState(false)
   const [resetArmed, setResetArmed] = useState(false)
   const [summary, setSummary] = useState<InningSummary | null>(initial.game.over ? { inning: initial.game.inning, allowed: 0, ours: 0, clean: false, finished: initial.game.runsFor > initial.game.runsAgainst ? 'WIN' : initial.game.runsFor < initial.game.runsAgainst ? 'LOSS' : 'TIE' } : null)
   const [tpPop, setTpPop] = useState<{ n: number; key: number } | null>(null)
@@ -119,6 +132,13 @@ function App() {
   const fastballs = PITCHES.filter(p => profile.arsenal[p.id].unlocked && p.family === 'FASTBALL')
   const fastest = Math.max(...(fastballs.length ? fastballs : PITCHES.filter(p => profile.arsenal[p.id].unlocked)).map(p => statSpeed(p, profile.arsenal[p.id])), 100)
   const showingMemory = showMemory && prior.length > 0
+  /** Progressive disclosure: batter mood and mindset appear from KBO Futures on (or with 상세). */
+  const advanced = game.tier >= 1 || settings.details
+  const tutorialStep = !settings.tutorialDone && profile.created && panel === 'none' && !summary && !welcome && !hook
+    ? phase === 'charging' ? { n: 3, text: '바늘이 황금 구간에 오면 한 번 더 탭! 빨간 구간은 실투' }
+      : phase === 'ready' && !aimedOnce ? { n: 1, text: '스트라이크 존을 터치해 던질 코스를 고르세요' }
+      : phase === 'ready' ? { n: 2, text: '아래 투구 버튼을 눌러 릴리스 미터를 시작하세요' } : null
+    : null
 
   sceneRef.current = {
     profile, strikeoutChance: game.strikes === 2, batterSide: side, teamColor: team.color, target, flight: null, previousFlight: lastFlightRef.current, previewFlight: preview,
@@ -130,6 +150,42 @@ function App() {
   useEffect(() => { if (profile.created && season.tier > unlockedTier) setUnlockedTier(season.tier) }, [profile.created, season.tier, unlockedTier])
   useEffect(() => { saveUnlockedTier(unlockedTier) }, [unlockedTier])
   useEffect(() => { try { localStorage.setItem(SAVE_KEY, JSON.stringify({ profile, game, season, history })) } catch { /* storage optional */ } }, [profile, game, season, history])
+  useEffect(() => { saveSettings(settings) }, [settings])
+  // Soundtrack plays from the first screen (draft day included); starts on the first tap if autoplay is blocked.
+  useEffect(() => {
+    setVolumes(settings.bgmVolume / 100, settings.sound ? settings.sfxVolume / 100 : 0)
+    setBgm(settings.sound && settings.bgmVolume > 0)
+  }, [settings.bgmVolume, settings.sfxVolume, settings.sound])
+  useEffect(() => { saveDaily(daily) }, [daily])
+  const notify = (title: string, sub = '', tone = 'reward') => { setToast({ title, sub, tone, key: performance.now() }); later(() => setToast(t => t && t.title === title ? null : t), 2600) }
+  /** TP from outside a pitch (daily missions, check-in): league multiplier applies. */
+  const grantTP = (raw: number) => { const n = Math.round(raw * league.tp); if (!n) return 0; setProfile(p => ({ ...p, trainingPoints: p.trainingPoints + n })); setSessionTP(s => s + n); setTpPop({ n, key: performance.now() }); return n }
+  const dailyRef = useRef(daily)
+  dailyRef.current = daily
+  const bumpDaily = (counts: Partial<Record<DailyId, number>>) => {
+    if (!Object.values(counts).some(Boolean)) return
+    const r = progressDaily(dailyRef.current, counts)
+    dailyRef.current = r.daily
+    setDaily(r.daily)
+    if (r.tp) { const n = grantTP(r.tp); notify(`일일 미션 완료 +${n} TP`, r.completed.join(' · ')); buzz([20, 30, 20, 30, 40]) }
+  }
+  // Day roll-over and check-in: on load and whenever the tab comes back (e.g. next morning's commute).
+  useEffect(() => {
+    const open = () => {
+      const r = openDay(loadDaily())
+      if (dayOpenedFor === r.daily.lastCheckIn && !r.checkIn) return
+      dayOpenedFor = r.daily.lastCheckIn
+      saveDaily(r.daily); setDaily(r.daily)
+      const paid = r.checkIn ? Math.round(r.checkIn * tierOf(season.tier).tp) : 0
+      if (paid) { setProfile(p => ({ ...p, trainingPoints: p.trainingPoints + paid })); setSessionTP(s => s + paid) }
+      if (profile.created && (paid || document.visibilityState === 'visible')) setWelcome({ checkIn: paid, streak: r.daily.streak })
+    }
+    open()
+    const onVis = () => { if (document.visibilityState === 'visible') open() }
+    document.addEventListener('visibilitychange', onVis)
+    return () => document.removeEventListener('visibilitychange', onVis)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   const timers = useRef(new Set<number>())
   const later = (fn: () => void, ms: number) => { const id = window.setTimeout(() => { timers.current.delete(id); fn() }, ms); timers.current.add(id) }
@@ -161,7 +217,13 @@ function App() {
     resultRef.current = { text: ev.immaculate ? 'IMMACULATE INNING!' : ev.strikeout && o === 'SWINGING_STRIKE' ? 'STRIKE THREE!' : o === 'SWINGING_STRIKE' ? (r.tags.includes('유인구') ? 'CHASE!' : 'SWING & MISS') : r.tags.includes('코너 꽉 찬 공') ? 'PAINTED THE CORNER' : call.text.split(' · ')[0], tone: call.tone, at: performance.now() }
     setCallout({ main: call.text, sub: [technique || tag, `${f.pitch.short} ${f.speed.toFixed(0)}km`].filter(Boolean).join(' · '), tone: call.tone })
     playOutcome(call, o, f)
-    if (reward) setTpPop({ n: reward, key: performance.now() })
+    if (reward) { setTpPop({ n: reward, key: performance.now() }); setSessionTP(s => s + reward) }
+    if (!settings.tutorialDone) set('tutorialDone', true)
+    bumpDaily({
+      k5: ev.strikeout ? 1 : 0, perfect8: f.grade === 'PERFECT' ? 1 : 0,
+      corner3: o === 'CALLED_STRIKE' && r.tags.includes('코너 꽉 찬 공') ? 1 : 0,
+      chase4: o === 'SWINGING_STRIKE' && r.tags.includes('유인구') ? 1 : 0,
+    })
 
     const stamina = clamp(profile.stamina - staminaCost(f.timingError + SWEET_CENTER, game, profile.height, profile.age) - (f.effort === 'power' ? 1.2 : 0) + (ev.inningOver ? STAMINA.inningRest : 0), 0, 100)
     setProfile(prev => ({
@@ -173,6 +235,7 @@ function App() {
     if (ev.inningOver) {
       const closed = closeInning(next)
       setGame(closed.game)
+      if (closed.summary.allowed === 0) later(() => bumpDaily({ clean1: 1 }), 1300)
       later(() => { setSummary(closed.summary); setGame(closed.game) }, 1250)
     } else {
       setGame(next)
@@ -183,13 +246,14 @@ function App() {
   finishRef.current = finishPitch
 
   function playOutcome(call: Call, o: PitchResult['outcome'], f: PitchFlight) {
-    if (o === 'HOME_RUN') { sfx('crack', soundOn); sfx('cheer', soundOn); setShake(s => s + 1) }
-    else if (o === 'SINGLE' || o === 'DOUBLE') { sfx('crack', soundOn); sfx('cheer', soundOn) }
+    if (o === 'HOME_RUN') { sfx('crack', soundOn); sfx('cheer', soundOn); setShake(s => s + 1); buzz([80, 40, 80]) }
+    else if (o === 'SINGLE' || o === 'DOUBLE') { sfx('crack', soundOn); sfx('cheer', soundOn); buzz(45) }
     else if (o === 'FOUL' || o.endsWith('_OUT')) { sfx('bat', soundOn); if (o !== 'FOUL') sfx('mitt', soundOn) }
     else if (o === 'SWINGING_STRIKE') { sfx('whiff', soundOn); sfx(f.grade === 'PERFECT' ? 'pop' : 'mitt', soundOn) }
     else sfx(f.grade === 'PERFECT' && o === 'CALLED_STRIKE' ? 'pop' : 'mitt', soundOn)
-    if (call.tone === 'k') { sfx('k', soundOn); navigator.vibrate?.([20, 40, 30]) }
-    else if (f.grade === 'PERFECT') navigator.vibrate?.([15, 30, 20])
+    if (call.tone === 'k') { sfx('k', soundOn); buzz([20, 40, 30]) }
+    else if (o.endsWith('_OUT')) buzz(18)
+    else if (f.grade === 'PERFECT') buzz([15, 30, 20])
     if (f.speed >= 158 && (o === 'SWINGING_STRIKE' || o === 'CALLED_STRIKE')) setShake(s => s + 1)
   }
 
@@ -223,7 +287,9 @@ function App() {
     return () => cancelAnimationFrame(raf)
   }, [])
 
-  const canPitch = profile.created && !retired && !game.over && panel === 'none' && !summary && !hook && stat.unlocked && (phase === 'ready' || phase === 'charging')
+  // In highlight mode a routine plate appearance is about to be auto-thrown: hold the ball.
+  const autoPending = settings.mode === 'highlight' && phase === 'ready' && game.abLog.length === 0 && !game.over && !isKeyMoment(game).key
+  const canPitch = profile.created && !retired && !game.over && panel === 'none' && !summary && !hook && !autoPending && stat.unlocked && (phase === 'ready' || phase === 'charging')
   const launch = (meter: number) => {
     if (meterStartedAtRef.current === null || flightRef.current) return
     meterStartedAtRef.current = null
@@ -241,7 +307,7 @@ function App() {
     animRef.current = r.swing ? { kind: 'swing', at: f.startedAt + f.duration * (slowK ? .7 + .3 / .35 : 1), contact: r.outcome !== 'SWINGING_STRIKE', barrel: r.barrel } : { ...IDLE, barrel: r.barrel }
     flightRef.current = f
     setPhase('flying')
-    if (f.meatball) { setCallout({ main: '실투!', sub: `${pitch.short}가 한가운데로 몰렸다 · ${f.speed.toFixed(1)} km/h`, tone: 'miss' }); navigator.vibrate?.([60]) }
+    if (f.meatball) { setCallout({ main: '실투!', sub: `${pitch.short}가 한가운데로 몰렸다 · ${f.speed.toFixed(1)} km/h`, tone: 'miss' }); buzz([60, 30, 60]) }
     else setCallout({ main: f.grade, sub: `${pitch.short} ${f.speed.toFixed(1)} km/h · 체감 ${f.perceivedSpeed.toFixed(1)}`, tone: f.grade === 'PERFECT' ? 'perfect' : f.grade === 'GOOD' ? 'good' : 'miss' })
     sfx('release', soundOn, f.speed)
   }
@@ -266,19 +332,30 @@ function App() {
     const x = (event.clientX - rect.left) / rect.width * STAGE.width
     const y = (event.clientY - rect.top) / rect.height * STAGE.height
     setTarget({ x: clamp((x - STAGE.zoneX) / (STAGE.zoneW / 2), -1.7, 1.7), y: clamp((y - STAGE.zoneY) / (STAGE.zoneH / 2), -1.7, 1.7) })
+    setAimedOnce(true)
   }
   const openPanel = (p: Panel) => { if (phase === 'flying') return; meterStartedAtRef.current = null; if (phase === 'charging') setPhase('ready'); setPanel(p) }
-  const upgrade = (key: StatKey) => {
-    const level = profile.arsenal[trainingPitch][key], cost = upgradeCost(level)
+  const upgrade = (key: StatKey, id: PitchType = trainingPitch) => {
+    const level = profile.arsenal[id][key], cost = upgradeCost(level)
     if (level >= 99 || profile.trainingPoints < cost) return
-    setProfile(prev => ({ ...prev, trainingPoints: prev.trainingPoints - cost, arsenal: { ...prev.arsenal, [trainingPitch]: { ...prev.arsenal[trainingPitch], [key]: level + 1 } } }))
-    sfx('ui', soundOn)
+    const d = pitchById(id), before = profile.arsenal[id]
+    const after = { ...profile, trainingPoints: profile.trainingPoints - cost, arsenal: { ...profile.arsenal, [id]: { ...before, [key]: level + 1 } } }
+    setProfile(prev => ({ ...prev, trainingPoints: prev.trainingPoints - cost, arsenal: { ...prev.arsenal, [id]: { ...prev.arsenal[id], [key]: level + 1 } } }))
+    sfx('levelup', soundOn)
+    const change = key === 'velocityLevel' ? `${statSpeed(d, before).toFixed(1)} → ${statSpeed(d, after.arsenal[id]).toFixed(1)} km/h`
+      : key === 'controlLevel' ? `황금 구간 ${(sweetSpot(level) * 100).toFixed(1)}% → ${(sweetSpot(level + 1) * 100).toFixed(1)}%`
+      : `무브먼트 ${(Math.hypot(d.moveX, d.moveY) * breakScale(level)).toFixed(1)} → ${(Math.hypot(d.moveX, d.moveY) * breakScale(level + 1)).toFixed(1)}cm`
+    const reached = newMilestones(profile, after)
+    if (reached.length) { notify(`마일스톤 · ${reached.join(' · ')}`, `${d.short} ${LABELS[key].label} LV.${level + 1} · ${change}`, 'milestone'); sfx('cheer', soundOn); buzz([30, 40, 30, 40, 60]) }
+    else notify(`${d.short} ${LABELS[key].label} LV.${level + 1}`, change, 'upgrade')
+    bumpDaily({ upgrade3: 1 })
   }
+  const recommended = recommendUpgrade(profile)
   const unlock = () => {
     const def = pitchById(trainingPitch)
     if (profile.trainingPoints < def.unlockCost) return
     setProfile(prev => ({ ...prev, trainingPoints: prev.trainingPoints - def.unlockCost, arsenal: { ...prev.arsenal, [trainingPitch]: { ...prev.arsenal[trainingPitch], unlocked: true } } }))
-    setSelected(trainingPitch); sfx('k', soundOn)
+    setSelected(trainingPitch); sfx('levelup', soundOn); sfx('cheer', soundOn)
   }
   const resetAtBatRefs = () => {
     setFocused(false); lastFlightRef.current = null; seenRef.current = { speeds: [], types: [] }; logOverrideRef.current = null; animRef.current = IDLE
@@ -292,11 +369,13 @@ function App() {
       const bonus = Math.round(((win ? 150 : loss ? 40 : 70) + performanceBonus(game) + (feat ? FEAT_TP[feat] : 0)) * league.tp * aging.tpMul)
       const fatigue = fatigueAfter(game, profile.stamina)
       setProfile(p => ({ ...p, trainingPoints: p.trainingPoints + bonus, fatigue, stamina: 100 - fatigue }))
+      setSessionTP(s => s + bonus)
+      bumpDaily({ game1: 1 })
       let nextSeason = seasonView
       if (move === 'callup' && promo.callUp) {
         // Mid-season call-up: same year, a new club, the rest of the schedule.
         setHistory(h => [...h, { ...seasonView, age: seasonView.age ?? profile.age, awards: seasonAwards(seasonView) }])
-        nextSeason = { ...newSeason(season.tier + 1, season.number + 1, seasonView.year, callUpSchedule(seasonView)), age: profile.age }
+        nextSeason = { ...newSeason(season.tier + 1, season.number + 1, seasonView.year, callUpSchedule(seasonView), seasonView.length), age: profile.age }
       } else if (seasonDone) {
         setHistory(h => [...h, { ...seasonView, age: seasonView.age ?? profile.age, awards: seasonAwards(seasonView) }])
         // New calendar year: one year older.
@@ -336,6 +415,50 @@ function App() {
     setSeason(newSeason()); setHistory([]); setSummary(null); setHook(false); setPhase('ready'); setProfile(defaultProfile()); setGame(newGame()); setSelected('FOUR_SEAM'); setResetArmed(false); setPanel('none')
   }
 
+  /** Highlight mode: throw the routine plate appearances automatically until a key moment. */
+  const runAuto = () => {
+    let g = game, stamina = profile.stamina, raw = 0, hookNow = false
+    let closed: ReturnType<typeof closeInning> | null = null
+    const mastery: Partial<Record<PitchType, number>> = {}
+    const lines: string[] = []
+    for (let guard = 0; guard < 12; guard++) {
+      const pa = autoPlateAppearance(g, { ...profile, stamina })
+      g = pa.game; stamina = pa.stamina; raw += pa.reward; lines.push(pa.line)
+      for (const [k, v] of Object.entries(pa.mastery)) mastery[k as PitchType] = (mastery[k as PitchType] ?? 0) + (v ?? 0)
+      if (pa.inningOver) { stamina = Math.min(100, stamina + STAMINA.inningRest); closed = closeInning(g); g = closed.game; break }
+      if (needsHook(stamina, g)) { hookNow = true; break }
+      if (isKeyMoment(g).key) break
+    }
+    const reward = Math.round(raw * league.tp * aging.tpMul)
+    setProfile(p => ({
+      ...p, stamina, trainingPoints: p.trainingPoints + reward,
+      arsenal: Object.fromEntries(Object.entries(p.arsenal).map(([k, s]) => [k, { ...s, mastery: s.mastery + (mastery[k as PitchType] ?? 0) }])) as PitcherProfile['arsenal'],
+    }))
+    if (reward) { setSessionTP(s => s + reward); setTpPop({ n: reward, key: performance.now() }) }
+    resetAtBatRefs(); battedRef.current = null; resultRef.current = { text: '', tone: '', at: 0 }
+    setGame(g)
+    setAutoFeed({ lines, key: performance.now() })
+    later(() => setAutoFeed(a => a && a.lines === lines ? null : a), closed ? 1500 : 2600)
+    const next = isKeyMoment(g)
+    setCallout(closed ? { main: '이닝 종료', sub: `자동 진행 ${lines.length}타자`, tone: 'out' }
+      : { main: next.key ? 'KEY MOMENT' : '자동 진행', sub: next.key ? `${next.reason} · 직접 승부!` : `${lines.length}타자`, tone: 'ready' })
+    if (next.key && !closed && !hookNow) buzz(25)
+    if (closed) {
+      const c = closed
+      setPhase('result')
+      if (c.summary.allowed === 0) later(() => bumpDaily({ clean1: 1 }), 1550)
+      later(() => { setSummary(c.summary); setPhase('ready') }, 1500)
+    } else if (hookNow) setHook(true)
+  }
+  const autoRef = useRef(runAuto)
+  autoRef.current = runAuto
+  const autoWanted = autoPending && profile.created && !retired && !welcome && !summary && !hook && panel === 'none'
+  useEffect(() => {
+    if (!autoWanted) return
+    const id = window.setTimeout(() => autoRef.current(), 380)
+    return () => clearTimeout(id)
+  }, [autoWanted, game])
+
   const half = sweetSpot(stat.controlLevel) / 2
   const pct = (v: number) => `${clamp(v, 0, 1) * 100}%`
   const dangerLeft = SWEET_CENTER - half - MEATBALL_MISS
@@ -373,21 +496,21 @@ function App() {
 
       <main className={`game-shell shake-${shake % 2}`}>
         <header className="app-header">
-          <Logo sub={`${profile.age}세 · S${season.number} · G${Math.min(season.scheduled, season.games + 1)}/${season.scheduled} · ${careerLine.wins}승 ${careerLine.losses}패`} />
+          <Logo sub={`${profile.age}세 · 시즌 ${season.number} · 통산 ${careerLine.wins}승 ${careerLine.losses}패`} />
           <div className="header-actions">
             <div className="tp-pill" aria-label={`훈련 포인트 ${profile.trainingPoints}`}><Zap size={13} fill="currentColor" /><strong>{compactTP(profile.trainingPoints)}</strong>{tpPop && <em key={tpPop.key} className="tp-pop">+{tpPop.n}</em>}</div>
             <button className="icon-button" onClick={() => openPanel('career')} aria-label="커리어 기록실"><Trophy size={17} /></button>
             <button className="icon-button train" onClick={() => { setTrainingPitch(selected); openPanel('training') }} aria-label="훈련실"><Activity size={17} /></button>
-            <button className="icon-button" onClick={() => setSoundOn(!soundOn)} aria-label={soundOn ? '소리 끄기' : '소리 켜기'}>{soundOn ? <Volume2 size={17} /> : <VolumeX size={17} />}</button>
+            <button className="icon-button" onClick={() => openPanel('settings')} aria-label="설정">{soundOn ? <SettingsIcon size={17} /> : <VolumeX size={17} />}</button>
             <button className="icon-button" onClick={() => openPanel('help')} aria-label="도움말"><CircleHelp size={17} /></button>
           </div>
         </header>
 
-        <div className="tier-banner" aria-label={`현재 리그: ${league.label}`}><b>{league.short}</b><span>{league.label}</span><em>TP ×{league.tp.toFixed(1)}</em></div>
-
-        <div className="arcade-ribbon">
-          <button disabled={phase !== 'ready' || Boolean(summary) || hook} onClick={() => openPanel('mission')}><span>등판 목표</span><b>{mission ? `${mission.title} ${arcade.progress}/${mission.goal}${arcade.completed ? ' ✓' : ''}` : game.pitches ? '이번 등판 목표 없음' : '오늘의 도전 선택 →'}</b></button>
-          <button disabled={phase === 'flying' || phase === 'charging'} onClick={() => openPanel('challenge')}><span>QUICK PLAY</span><b>챌린지 ↗</b></button>
+        <div className="status-strip">
+          <div className="league-chip" aria-label={`현재 리그: ${league.label} · ${season.games + 1 > season.scheduled ? season.scheduled : season.games + 1}번째 경기 / ${season.scheduled}`} title={league.label}><b>{league.short}</b><span>G{Math.min(season.scheduled, season.games + 1)}/{season.scheduled}</span></div>
+          <button className="strip-button" disabled={phase !== 'ready' || Boolean(summary) || hook} onClick={() => openPanel('mission')}><span>등판 목표</span><b>{mission ? `${mission.title} ${arcade.progress}/${mission.goal}${arcade.completed ? ' ✓' : ''}` : game.pitches ? '없음' : '고르기 ›'}</b></button>
+          <button className="strip-button daily" disabled={phase === 'flying' || phase === 'charging'} onClick={() => openPanel('daily')}><span>오늘</span><b>{daily.missions.filter(m => m.done).length}/{daily.missions.length || 3}{daily.allClear ? ' ✓' : ''}</b></button>
+          <button className="strip-button quick" disabled={phase === 'flying' || phase === 'charging'} onClick={() => openPanel('challenge')}><span>3분</span><b>챌린지</b></button>
         </div>
         <div className="scorebug">
           <div className="teams">
@@ -413,19 +536,22 @@ function App() {
           <div className={`batter-card ${side === 'R' ? 'left' : 'right'}`}>
             <div className="batter-top"><span className="order">{batter.order}</span><strong>{batter.name}</strong><span className={`hand hand-${side}`}>{handLabel}</span></div>
             <div className="batter-line">{batter.id.startsWith('rival-') && <em className="rival-label">RIVAL · </em>}{batter.avg.toFixed(3).slice(1)} · {batter.hr}HR{prior.length > 0 && <em> · {prior.length + 1}번째 대결</em>}</div>
-            <div className={`mood mood-${mood.toLowerCase()}`} aria-label={`타자 기세: ${MOOD_LABEL[mood]}`}><span><i style={{ left: `${(confidence + 1) * 50}%` }} /></span><b>{MOOD_LABEL[mood]}</b></div>
+            {advanced && <div className={`mood mood-${mood.toLowerCase()}`} aria-label={`타자 기세: ${MOOD_LABEL[mood]}`}><span><i style={{ left: `${(confidence + 1) * 50}%` }} /></span><b>{MOOD_LABEL[mood]}</b></div>}
             <div className="scout-line"><Eye size={10} /> {report[prior.length ? Math.min(2, report.length - 1) : 0]}</div>
           </div>
-          <div className={`mind-chip ${side === 'R' ? 'right' : 'left'}`}>
+          {advanced && <div className={`mind-chip ${side === 'R' ? 'right' : 'left'}`}>
             <span>{matchup}</span>
             <b>{batterMindset({ balls: game.balls, strikes: game.strikes, seenTypes: seenRef.current.types })}</b>
-          </div>
+          </div>}
           {leverage && <div className="leverage">{leverage}</div>}
           <div className="stage-toggles">
             {prior.length > 0 && <button className={showMemory ? 'chip-toggle on memory' : 'chip-toggle'} onClick={() => setShowMemory(!showMemory)} aria-pressed={showMemory}><History size={12} /> 지난 타석</button>}
             <button className={scout ? 'chip-toggle on heat' : 'chip-toggle'} onClick={() => setScout(!scout)} aria-pressed={scout}><Flame size={12} /> 핫존</button>
+            <button className={settings.details ? 'chip-toggle on' : 'chip-toggle'} onClick={() => set('details', !settings.details)} aria-pressed={settings.details}><Settings2 size={12} /> 상세</button>
           </div>
-          {showingMemory && phase === 'ready' && <div className="memory-banner" aria-label="지난 타석 기록">{prior.map((pa, i) => <div key={i}><small>{pa.inning}회</small><PaChips pitches={pa.pitches} /><b>{pa.result}</b></div>)}</div>}
+          {autoFeed && <div key={autoFeed.key} className="auto-feed" aria-live="polite"><span>AUTO · 하이라이트 모드</span>{autoFeed.lines.slice(-4).map((l, i) => <p key={i}>{l}</p>)}</div>}
+          {tutorialStep && <div className={`coach coach-${tutorialStep.n}`} role="status"><b>{tutorialStep.n}/3</b><span>{tutorialStep.text}</span></div>}
+          {showingMemory && phase === 'ready' && !autoFeed && <div className="memory-banner" aria-label="지난 타석 기록">{prior.map((pa, i) => <div key={i}><small>{pa.inning}회</small><PaChips pitches={pa.pitches} /><b>{pa.result}</b></div>)}</div>}
         </section>
 
         <div className="pitch-bar" role="radiogroup" aria-label="구종">
@@ -444,13 +570,13 @@ function App() {
             <div className="effort-switch" aria-label="투구 강도">{(['normal', 'power'] as const).map(mode => <button key={mode} aria-pressed={effort === mode} disabled={phase !== 'ready'} onClick={() => setEffort(mode)}>{mode === 'normal' ? '안정' : '전력 +3km'}</button>)}</div>
             <button className={`focus-trigger ${focused ? 'armed' : ''}`} disabled={arcade.focus < 100 || phase !== 'ready'} aria-pressed={focused} onClick={() => setFocused(v => !v)}><i style={{ width: `${arcade.focus}%` }} /><span>{focused ? '집중 장전 ✓' : arcade.focus >= 100 ? '집중 투구 사용' : `집중 ${arcade.focus}%`}</span></button>
           </div>
-          <p className="tactics-hint">{focused ? '다음 한 공 · 느린 미터 + PERFECT 제구 강화' : effort === 'power' ? '빠른 미터 · 탄착 분산 +30% · 체력 추가 소모 1.2' : '배합 성공과 아웃으로 집중 충전 · 100%에서 사용'}</p>
+          {settings.details && <p className="tactics-hint">{focused ? '다음 한 공 · 느린 미터 + PERFECT 제구 강화' : effort === 'power' ? '빠른 미터 · 탄착 분산 +30% · 체력 추가 소모 1.2' : '배합 성공과 아웃으로 집중 충전 · 100%에서 사용'}</p>}
           <div className={`callout tone-${callout.tone}`} aria-live="polite"><b>{phase === 'charging' ? 'RELEASE' : callout.main}</b><span>{phase === 'charging' ? '황금 구간에서 탭 · 빨간 구간은 실투' : callout.sub}</span></div>
-          {preview && phase !== 'charging' && <div className="metrics">
-            <span title="익스텐션 반영 체감 구속"><small>체감</small>{preview.perceivedSpeed.toFixed(1)}</span>
+          {preview && phase !== 'charging' && (settings.details || tunnel.score > .3 || readRisk > .35) && <div className="metrics">
+            {settings.details && <><span title="익스텐션 반영 체감 구속"><small>체감</small>{preview.perceivedSpeed.toFixed(1)}</span>
             <span title="유도 수직 무브먼트"><small>IVB</small>{preview.ivb > 0 ? '+' : ''}{preview.ivb}cm</span>
-            <span title="수직 진입각"><small>VAA</small>{preview.vaa.toFixed(1)}°</span>
-            {tunnel.score > .3 && <em className="badge tunnel">{tunnel.pair ? 'HI-LO ' : ''}TUNNEL {Math.round(tunnel.score * 100)}</em>}
+            <span title="수직 진입각"><small>VAA</small>{preview.vaa.toFixed(1)}°</span></>}
+            {tunnel.score > .3 && (game.tier >= 1 || settings.details) && <em className="badge tunnel">{tunnel.pair ? 'HI-LO ' : ''}TUNNEL {Math.round(tunnel.score * 100)}</em>}
             {readRisk > .35 && <em className="badge read">읽힘 {Math.round(readRisk * 100)}%</em>}
           </div>}
           <div ref={gaugeElRef} className="gauge" aria-hidden="true">
@@ -463,7 +589,7 @@ function App() {
             <span className="gauge-bang" style={{ left: `calc(${pct(dangerLeft)} / 2)` }}>!</span>
           </div>
           <button className={`pitch-button ${phase === 'charging' ? 'charging' : ''}`} onClick={e => { e.currentTarget.blur(); tapMeter() }} disabled={!canPitch}>
-            {phase === 'flying' ? '…' : phase === 'charging' ? '릴리스!' : phase === 'result' ? '다음 공 준비' : <>투구 <small>{pitch.short} · {statSpeed(pitch, stat).toFixed(0)}km</small></>}
+            {autoPending && phase === 'ready' ? '자동 진행…' : phase === 'flying' ? '…' : phase === 'charging' ? '릴리스!' : phase === 'result' ? '다음 공 준비' : <>투구 <small>{pitch.short} · {statSpeed(pitch, stat).toFixed(0)}km</small></>}
           </button>
         </section>
       </main>
@@ -487,7 +613,7 @@ function App() {
       </aside>
     </div>
 
-    {summary && panel === 'none' && <div className="overlay"><section className="sheet inning-sheet" role="dialog" aria-modal="true" aria-label={seasonDone ? 'Season Summary' : summary.finished ? 'Game Summary' : 'Inning Summary'}>
+    {summary && panel === 'none' && !welcome && <div className="overlay"><section className="sheet inning-sheet" role="dialog" aria-modal="true" aria-label={seasonDone ? 'Season Summary' : summary.finished ? 'Game Summary' : 'Inning Summary'}>
       <span className="eyebrow">{summary.finished ? `FINAL · ${league.short} · ${DECISION_LABEL[pitcherDecision(game)]}` : `${summary.inning}회 종료`}</span>
       <h1>{summary.finished && gameFeat(game) && gameFeat(game) !== '완투' ? `${gameFeat(game)}!` : summary.finished === 'WIN' ? (game.saveOpp ? '세이브 상황 사수!' : '승리!') : summary.finished === 'LOSS' ? '패전…' : summary.finished === 'TIE' ? '무승부' : summary.allowed === 0 ? (summary.clean ? '삼자범퇴' : '무실점') : `${summary.allowed}실점`}</h1>
       <div className="table-scroll"><table className="linescore"><thead><tr><th />{game.lineScore.slice(0, summary.inning).map((_, i) => <th key={i}>{i + 1}</th>)}<th>R</th></tr></thead>
@@ -505,6 +631,8 @@ function App() {
         {seasonDone && (seasonAwards(seasonView).length > 0 || (seasonView.feats ?? []).length > 0) && <ul className="award-list big">{seasonAwards(seasonView).map(a => <li key={a} className="award"><Trophy size={14} /> {a}</li>)}{(seasonView.feats ?? []).map(f => <li key={f} className="feat"><Sparkles size={13} /> {f}</li>)}</ul>}
         {seasonDone && seasonAwards(seasonView).length === 0 && <p className="age-hint">이번 시즌 수상 없음 · 리그별 수상 기준은 커리어 기록실에서 확인</p>}
         <PromotionCard season={seasonView} done={seasonDone} /></>}
+      <div className="session-line"><span>이번 세션 <b>+{compactTP(sessionTP)} TP</b></span><span>자동 저장됨 · 닫아도 여기서 이어집니다</span></div>
+      {recommended && profile.trainingPoints >= recommended.cost && <button className="recommend-button" onClick={() => upgrade(recommended.key, recommended.pitch)}><Sparkles size={15} /> 추천 강화 <b>{pitchById(recommended.pitch).short} {LABELS[recommended.key].label} LV.{recommended.level}→{recommended.level + 1}</b><small>{recommended.cost} TP</small></button>}
       {!summary.finished ? <button className="primary-button" onClick={() => continueGame()}>{summary.inning + 1}회 초 등판 <ArrowRight size={18} /></button>
         : seasonDone && retireStat.forced ? <><p className="retire-note">{RETIRE_LABEL[retireStat.forced]} — {retireStat.forced === 'AGE' ? `${profile.age}세, 몸이 더는 버티지 못합니다.` : `${profile.age}세까지 프로 계약을 따내지 못했습니다.`}</p><button className="primary-button" onClick={() => retire(retireStat.forced!)}>은퇴식 <ArrowRight size={18} /></button></>
         : seasonDone ? (promo.demote ? <button className="primary-button" onClick={() => continueGame('demote')}>강등 → {TIERS[game.tier - 1].label} <ArrowRight size={18} /></button>
@@ -514,10 +642,11 @@ function App() {
         : <button className="primary-button" onClick={() => continueGame()}>다음 경기 <ArrowRight size={18} /></button>}
       {summary.finished && seasonDone && !retireStat.forced && profile.age >= AGE.voluntary && <button className="secondary-button danger" onClick={() => retire('VOLUNTARY')}>여기서 은퇴 <small>{profile.age}세 · 커리어를 역대 선수에 기록</small></button>}
       {summary.finished && seasonDone && !retireStat.forced && <p className="age-hint">다음 시즌 {profile.age + 1}세 · {ageStage(profile.age + 1)}{season.tier === 0 && profile.age + 1 >= AGE.amateurDeadline ? ` · ${AGE.amateurDeadline}세 시즌까지 프로 입성 못 하면 은퇴` : ''}{profile.age + 1 >= 38 ? ` · ${AGE.forceRetire}세 강제 은퇴` : ''}</p>}
+      <button className="mode-switch" onClick={() => set('mode', settings.mode === 'highlight' ? 'full' : 'highlight')} aria-pressed={settings.mode === 'highlight'}>{settings.mode === 'highlight' ? '하이라이트 모드 · 중요한 타석만 직접' : '풀 모드 · 모든 공 직접'} <small>탭해서 {settings.mode === 'highlight' ? '풀 모드' : '하이라이트 모드'}로</small></button>
       {summary.finished && <div className="sheet-actions"><button className="secondary-button" onClick={() => openPanel('training')}><Zap size={15} /> 구종 강화</button><button className="secondary-button" onClick={() => openPanel('career')}>커리어 기록실</button></div>}
     </section></div>}
 
-    {hook && !summary && panel === 'none' && <div className="overlay"><section className="sheet hook-sheet" role="alertdialog" aria-modal="true" aria-label="교체 신호">
+    {hook && !summary && panel === 'none' && !welcome && <div className="overlay"><section className="sheet hook-sheet" role="alertdialog" aria-modal="true" aria-label="교체 신호">
       <span className="eyebrow">MOUND VISIT</span>
       <h1>감독이 올라옵니다</h1>
       <div className="hook-stats">
@@ -532,6 +661,41 @@ function App() {
         ? <button className="secondary-button danger" onClick={refuseHook}>한 타자만 더! <small>경기당 1번만 거부 가능 · 다음 경기 피로 +6</small></button>
         : <p className="hook-final">이미 한 번 버텼습니다. 이번엔 공을 넘겨야 합니다.</p>}
     </section></div>}
+    {toast && <div key={toast.key} className={`toast tone-${toast.tone}`} role="status"><b>{toast.title}</b>{toast.sub && <span>{toast.sub}</span>}</div>}
+    {welcome && profile.created && !retired && panel === 'none' && <div className="overlay"><section className="sheet welcome-sheet" role="dialog" aria-modal="true" aria-label="이어하기">
+      <span className="eyebrow">WELCOME BACK</span>
+      <h1>{profile.name}, 마운드로</h1>
+      {welcome.checkIn > 0 && <div className="checkin"><b>출석 {welcome.streak}일째</b><span>+{welcome.checkIn} TP</span><small>{welcome.streak >= 7 ? '7일 연속 · 최대 보상' : `연속 출석할수록 보상 증가 (최대 7일)`}</small></div>}
+      <div className="resume-line">{game.over ? <>경기 종료 · 결과 정리부터</> : game.pitches === 0 ? <>새 경기 · vs {team.short} · {league.short} G{Math.min(season.scheduled, season.games + 1)}/{season.scheduled}</> : <>{game.inning}회초 {game.outs}아웃{game.bases.some(Boolean) ? ` · 주자 ${game.bases.map((b, i) => b ? `${i + 1}` : '').filter(Boolean).join('·')}루` : ''} · ACE {game.runsFor} : {game.runsAgainst} {team.short} · {game.strikeouts}K</>}</div>
+      <span className="eyebrow">오늘의 미션</span>
+      <ul className="daily-list">{daily.missions.map(m => { const d = DAILY_POOL[m.id]; return <li key={m.id} className={m.done ? 'done' : ''}><span>{m.done ? <Check size={14} /> : <i />}{d.text}</span><b>{m.progress}/{d.goal}</b><em style={{ width: `${m.progress / d.goal * 100}%` }} /></li> })}</ul>
+      <button className="mode-switch" onClick={() => set('mode', settings.mode === 'highlight' ? 'full' : 'highlight')} aria-pressed={settings.mode === 'highlight'}>{settings.mode === 'highlight' ? '하이라이트 모드 · 중요한 타석만 직접' : '풀 모드 · 모든 공 직접'} <small>탭해서 변경</small></button>
+      <button className="primary-button" onClick={() => setWelcome(null)}>{game.pitches === 0 || game.over ? '시작하기' : '이어서 던지기'} <ArrowRight size={18} /></button>
+    </section></div>}
+    {panel === 'daily' && <div className="overlay" onPointerDown={e => { if (e.target === e.currentTarget) setPanel('none') }}><section className="sheet daily-sheet" role="dialog" aria-modal="true" aria-label="오늘의 미션">
+      <div className="sheet-top"><span className="eyebrow">DAILY · 출석 {daily.streak}일째</span><button className="icon-button" onClick={() => setPanel('none')} aria-label="닫기"><ArrowLeft size={18} /></button></div>
+      <h1>오늘의 미션</h1>
+      <p className="muted">미션당 +{Math.round(50 * league.tp)} TP · 3개 모두 달성 시 +{Math.round(100 * league.tp)} TP. 자동 진행 타석은 집계되지 않습니다. 매일 자정에 바뀝니다.</p>
+      <ul className="daily-list">{daily.missions.map(m => { const d = DAILY_POOL[m.id]; return <li key={m.id} className={m.done ? 'done' : ''}><span>{m.done ? <Check size={14} /> : <i />}{d.text}</span><b>{m.progress}/{d.goal}</b><em style={{ width: `${m.progress / d.goal * 100}%` }} /></li> })}</ul>
+      <button className="primary-button" onClick={() => setPanel('none')}>마운드로 <Check size={18} /></button>
+    </section></div>}
+    {panel === 'settings' && <div className="overlay" onPointerDown={e => { if (e.target === e.currentTarget) setPanel('none') }}><section className="sheet settings-sheet" role="dialog" aria-modal="true" aria-label="설정">
+      <div className="sheet-top"><span className="eyebrow">SETTINGS</span><button className="icon-button" onClick={() => setPanel('none')} aria-label="닫기"><ArrowLeft size={18} /></button></div>
+      <h1>설정</h1>
+      <span className="eyebrow">사운드</span>
+      <button className={`setting-row ${soundOn ? 'on' : ''}`} onClick={() => setSoundOn(!soundOn)} aria-pressed={soundOn}>{soundOn ? <Volume2 size={17} /> : <VolumeX size={17} />}<span>전체 소리</span><b>{soundOn ? 'ON' : 'OFF'}</b></button>
+      <label className={`volume-row ${soundOn ? '' : 'muted-row'}`}><Music size={17} /><span>배경음악<small>스트라이크 존으로</small></span>
+        <input type="range" min="0" max="100" step="5" value={settings.bgmVolume} disabled={!soundOn} onChange={e => set('bgmVolume', Number(e.target.value))} style={{ '--fill': `${settings.bgmVolume}%` } as CSSProperties} aria-label="배경음악 볼륨" /><b>{settings.bgmVolume}</b></label>
+      <label className={`volume-row ${soundOn ? '' : 'muted-row'}`}><Volume2 size={17} /><span>효과음<small>투구 · 타격 · 환호</small></span>
+        <input type="range" min="0" max="100" step="5" value={settings.sfxVolume} disabled={!soundOn} onChange={e => set('sfxVolume', Number(e.target.value))} onPointerUp={() => sfx('pop', soundOn)} onKeyUp={() => sfx('pop', soundOn)} style={{ '--fill': `${settings.sfxVolume}%` } as CSSProperties} aria-label="효과음 볼륨" /><b>{settings.sfxVolume}</b></label>
+      <span className="eyebrow">플레이</span>
+      <button className="setting-row" onClick={() => set('mode', settings.mode === 'highlight' ? 'full' : 'highlight')}><Zap size={17} /><span>플레이 모드<small>{settings.mode === 'highlight' ? '중요한 타석만 직접 · 나머지 자동' : '모든 공 직접'}</small></span><b>{settings.mode === 'highlight' ? '하이라이트' : '풀'}</b></button>
+      <button className={`setting-row ${settings.haptics ? 'on' : ''}`} onClick={() => set('haptics', !settings.haptics)} aria-pressed={settings.haptics}><Activity size={17} /><span>진동</span><b>{settings.haptics ? 'ON' : 'OFF'}</b></button>
+      <span className="eyebrow">화면</span>
+      <button className={`setting-row ${showZone ? 'on' : ''}`} onClick={() => setShowZone(!showZone)} aria-pressed={showZone}><Settings2 size={17} /><span>스트라이크 존 선</span><b>{showZone ? 'ON' : 'OFF'}</b></button>
+      <button className={`setting-row ${settings.details ? 'on' : ''}`} onClick={() => set('details', !settings.details)} aria-pressed={settings.details}><Eye size={17} /><span>상세 수치<small>IVB · VAA · 체감 구속 · 타자 기세</small></span><b>{settings.details ? 'ON' : 'OFF'}</b></button>
+      <button className="primary-button" onClick={() => setPanel('none')}>닫기 <Check size={18} /></button>
+    </section></div>}
     {!profile.created && <Creator initialProfile={profile} unlockedTier={unlockedTier} legacyBonus={legacyBonus(legacy)} legacyCount={legacy.length} onSave={(p, tier) => { setProfile({ ...p, age: START_AGE[tier], startAge: START_AGE[tier], trainingPoints: p.trainingPoints + legacyBonus(legacy) }); const first = PITCHES.find(def => p.arsenal[def.id].unlocked)!.id; setSelected(first); setTrainingPitch(first); setSeason({ ...newSeason(tier), age: START_AGE[tier] }); setHistory([]); setGame(newGame(undefined, tier)) }} editing={false} />}
     {panel === 'profile' && profile.created && <Creator initialProfile={profile} onSave={p => { setProfile(p); setPanel('career') }} editing onClose={() => setPanel('career')} />}
     {panel === 'career' && <CareerHub profile={profile} history={history} current={seasonView} onClose={() => setPanel('none')} onEdit={() => setPanel('profile')}
@@ -543,6 +707,7 @@ function App() {
     {panel === 'training' && <div className="overlay" onPointerDown={e => { if (e.target === e.currentTarget) setPanel('none') }}><section className="sheet training-sheet" role="dialog" aria-modal="true" aria-label="훈련실">
       <div className="sheet-top"><span className="eyebrow">PITCH LAB</span><button className="icon-button" onClick={() => setPanel('none')} aria-label="닫기"><ArrowLeft size={18} /></button></div>
       <div className="sheet-title"><h1>훈련실</h1><div className="tp-large"><Zap size={16} fill="currentColor" /> {profile.trainingPoints} <small>TP</small></div></div>
+      {recommended && <button className="recommend-button" disabled={profile.trainingPoints < recommended.cost} onClick={() => { setTrainingPitch(recommended.pitch); upgrade(recommended.key, recommended.pitch) }}><Sparkles size={15} /> 추천 강화 <b>{pitchById(recommended.pitch).short} {LABELS[recommended.key].label} LV.{recommended.level}→{recommended.level + 1}</b><small>{recommended.cost} TP</small></button>}
       <div className="training-tabs">{PITCHES.map(p => <button key={p.id} className={trainingPitch === p.id ? 'active' : ''} onClick={() => setTrainingPitch(p.id)}>{p.short}{!profile.arsenal[p.id].unlocked && <LockKeyhole size={10} />}</button>)}</div>
       {(() => {
         const p = pitchById(trainingPitch), s = profile.arsenal[trainingPitch]
@@ -562,12 +727,13 @@ function App() {
     {panel === 'help' && <div className="overlay" onPointerDown={e => { if (e.target === e.currentTarget) setPanel('none') }}><section className="sheet help-sheet" role="dialog" aria-modal="true" aria-label="승부의 기술">
       <div className="sheet-top"><span className="eyebrow">SCOUTING NOTES</span><button className="icon-button" onClick={() => setPanel('none')} aria-label="닫기"><ArrowLeft size={18} /></button></div>
       <h1>승부의 기술</h1>
+      <div className="help-step"><b>00</b><div><strong>하이라이트 모드</strong><p>1회 선두 타자·라이벌·득점권 위기·9회 1점 차 접전만 직접 던지고, 나머지 타석은 같은 규칙으로 자동 진행됩니다. 자동 타석은 TP {Math.round(AUTO_TP * 100)}%. 모든 공을 직접 던지려면 풀 모드로 바꾸세요.</p></div></div>
       <div className="help-step"><b>01</b><div><strong>릴리스 타이밍</strong><p>황금 구간 한가운데일수록 탄착이 모입니다. 구간을 벗어난 만큼 퍼지고, 빨간 구간이나 정점 이후에 놓치면 <em>!</em> 실투 — 한가운데 행잉볼이 됩니다.</p></div></div>
       <div className="help-step"><b>02</b><div><strong>타자는 기억한다</strong><p>두 번째·세 번째 대결에서 같은 구종·같은 코스를 반복하면 타자가 노리고 들어옵니다. 존 위의 ◆ 표시가 지난 타석 투구입니다.</p></div></div>
       <div className="help-step"><b>03</b><div><strong>IVB · VAA · 피치 터널</strong><p>큰 키·오버핸드는 포심 IVB와 다운힐 플레인을 키워 하이 패스트볼이 떠오르는 것처럼 보입니다. 하이 포심 뒤 같은 길로 오다 떨어지는 공은 <em>HI-LO TUNNEL</em>.</p></div></div>
       <div className="help-step"><b>04</b><div><strong>기세와 스카우팅</strong><p>헛스윙·삼진이 쌓인 타자는 조급해져 유인구에 더 손이 나가고, 안타를 친 타자는 감을 잡습니다. 타자 카드의 한 줄 리포트를 확인하세요.</p></div></div>
       <div className="help-options">
-        <button onClick={() => setShowZone(!showZone)}><Settings2 size={16} /> 스트라이크 존 선 <span>{showZone ? 'ON' : 'OFF'}</span></button>
+        <button onClick={() => setPanel('settings')}><SettingsIcon size={16} /> 소리 · 진동 · 화면 설정 <span>열기</span></button>
         <button className={resetArmed ? 'reset-confirm' : ''} onClick={() => { if (resetArmed) resetAll(); else setResetArmed(true) }}><RotateCcw size={16} /> {resetArmed ? '한 번 더 누르면 기록 삭제 (리그 해금은 유지)' : '새 선수로 시작'} <span>{resetArmed ? '확인' : 'RESET'}</span></button>
       </div>
       <button className="primary-button" onClick={() => { setResetArmed(false); setPanel('none') }}>마운드로 <Check size={18} /></button>
