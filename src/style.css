@@ -2,20 +2,20 @@
 
 /* ───────── Theme: night game — dark slate, stadium turf, clean white, neon amber & cyan ───────── */
 :root {
-  --bg: #080d18;
-  --slate: #0e1626;
-  --panel: #111b2e;
-  --panel-2: #172439;
-  --line: #22314b;
-  --line-2: #2e4163;
+  --bg: #080f17;
+  --slate: #101b26;
+  --panel: #142330;
+  --panel-2: #1b3040;
+  --line: #293e4d;
+  --line-2: #3b5361;
   --text: #f5f8fc;
-  --muted: #8d9cb5;
-  --dim: #5f6f8a;
+  --muted: #a0b3c1;
+  --dim: #8598aa;
   --turf: #1f9d55;
   --turf-deep: #0f5132;
-  --amber: #ffb400;
-  --amber-2: #ff8a00;
-  --cyan: #22d3ee;
+  --amber: #f2c66d;
+  --amber-2: #dfa84c;
+  --cyan: #70e3c4;
   --danger: #ff4d5e;
   --good: #3ddc84;
   --radius: 14px;
@@ -597,3 +597,74 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--cyan); outl
 .criteria-table td:nth-child(3) { color: var(--muted) }
 .criteria-table td:last-child { width: 1%; text-align: center; color: var(--dim) }
 .criteria-table tr.met td:nth-child(2), .criteria-table tr.met td:last-child { color: #7fe0a8 }
+/* Arcade edition: clear hierarchy, tactile controls, quiet surfaces. */
+.arcade-ribbon { display:flex; gap:8px; margin:0 0 8px; flex-shrink:0 }
+.arcade-ribbon button { flex:1; display:flex; flex-direction:column; align-items:flex-start; gap:3px; padding:9px 12px; border:1px solid var(--line); background:linear-gradient(120deg,#162936,#10212a); border-radius:10px; text-align:left; min-width:0 }
+.arcade-ribbon button:last-child { flex:0 0 auto }
+.arcade-ribbon span { font-size:9px; letter-spacing:1.1px; color:var(--muted) }
+.arcade-ribbon b { font-size:11px; color:var(--cyan) }
+.pitch-tactics { display:flex; gap:8px; align-items:stretch }
+.effort-switch { display:flex; background:#080f17; padding:3px; border-radius:9px; border:1px solid var(--line) }
+.effort-switch button { padding:7px 10px; font-size:11px; border:0; border-radius:6px; background:transparent; color:var(--muted); font-weight:700 }
+.effort-switch button[aria-pressed=true] { color:#eafcf6; background:#28443f }
+.effort-switch button:last-child[aria-pressed=true] { background:#523d24; color:#ffe3aa }
+.focus-trigger { position:relative; overflow:hidden; flex:1; border:1px solid #385951; background:#102721; border-radius:9px; font-size:12px; font-weight:800; min-height:36px }
+.focus-trigger i { position:absolute; inset:0 auto 0 0; background:#245e4d; transition:width .3s; pointer-events:none }
+.focus-trigger span { position:relative; z-index:1 }
+.focus-trigger:disabled { color:#afc7bd; cursor:default }
+.focus-trigger.armed { border-color:var(--cyan); box-shadow:0 0 0 2px #70e3c41c }
+.tactics-hint { font-size:10px; color:var(--muted); margin:5px 0 8px; line-height:1.5 }
+.rival-label { color:var(--amber) !important; letter-spacing:.8px; font-weight:800 }
+.challenge-grid { display:grid; gap:10px; margin:20px 0 }
+.challenge-grid button { display:flex; flex-direction:column; align-items:flex-start; gap:9px; padding:20px; text-align:left; background:linear-gradient(125deg,#1b3540,#14232d); border:1px solid var(--line-2); border-radius:14px; transition:border-color .15s, background .15s }
+.challenge-grid button:hover:not(:disabled),.challenge-grid button[aria-pressed=true] { border-color:var(--cyan); background:#203c40 }
+.challenge-grid strong { font-size:19px; letter-spacing:-.5px }
+.challenge-grid span:not(.eyebrow), .challenge-grid small { font-size:12px; color:var(--muted) }
+.challenge-grid button:disabled { opacity:.5 }
+.challenge-score { display:flex; justify-content:space-between; gap:10px; padding:15px; background:#0a1720; border:1px solid var(--line); border-radius:10px; color:var(--cyan); font-family:var(--display); font-size:20px }
+.challenge-zone { display:grid; grid-template-columns:repeat(5,1fr); width:230px; max-width:100%; aspect-ratio:1; margin:15px auto; border:1px solid var(--line-2); border-radius:12px; overflow:hidden }
+.challenge-zone button { border:1px solid #314c5a; background:#213c47; color:#c2d9df; min-width:0; font-size:20px }
+.challenge-zone button.outside { background:#101e27; border-color:#20343e }
+.challenge-zone button.active { background:#70e3c4; color:#082218; box-shadow:inset 0 0 0 2px #d8fff1 }
+.challenge-meter { height:22px; position:relative; background:#09141b; border:1px solid var(--line-2); border-radius:6px; margin:12px 0; overflow:hidden }
+.challenge-meter span { position:absolute; height:100%; background:#a17a33 }
+.challenge-meter i { position:absolute; height:100%; width:3px; background:white }
+.challenge-message { color:var(--amber); min-height:25px; font-weight:800 }
+.challenge-sheet .secondary-button { margin-top:8px }
+.trait-picker { margin:16px 0; padding:15px; border:1px solid var(--line); border-radius:12px; background:#0f2028 }
+.trait-picker p { margin:8px 0 12px; color:var(--muted); font-size:11px }
+.trait-picker > div { display:grid; grid-template-columns:1fr 1fr; gap:8px }
+.trait-picker button { padding:12px; border:1px solid var(--line-2); border-radius:9px; background:var(--panel); display:flex; flex-direction:column; gap:6px; text-align:left }
+.trait-picker button small { font-size:11px; color:var(--muted); line-height:1.5 }
+.trait-picker button[aria-pressed=true] { border-color:var(--cyan); background:#1c3c35 }
+.trait-picker button:disabled:not([aria-pressed=true]) { opacity:.5 }
+.performance-card { display:flex; flex-direction:column; gap:8px; text-align:left; margin:14px 0; padding:18px; background:linear-gradient(110deg,#253b31,#192b2c); border:1px solid #436250; border-radius:12px }
+.performance-card > span { font-size:10px; color:var(--cyan); letter-spacing:1.4px }
+.performance-card strong { font-size:21px; color:var(--amber) }
+.performance-card small { color:var(--muted); line-height:1.6 }
+.velocity-lab { margin:18px 0; padding:16px; background:#0c1b24; border:1px solid var(--line); border-radius:12px }
+.velocity-lab p { font-size:11px; color:var(--muted); line-height:1.7 }
+.velocity-lab > div { display:flex; gap:8px; align-items:center; margin:10px 0; font-size:11px }
+.velocity-lab > div > span { width:48px }
+.velocity-lab i { flex:1; height:6px; border-radius:3px; background:#233944; overflow:hidden }
+.velocity-lab i b { display:block; height:100%; border-radius:3px }
+.velocity-lab strong { width:34px; text-align:right; font-variant-numeric:tabular-nums }
+.velocity-lab small { width:53px; color:var(--muted); text-align:right }
+.control-card { border-color:#345044; background:linear-gradient(155deg,#192c35,#111e28) }
+.pitch-button { background:linear-gradient(120deg,#85ebcb,#55c9a6); color:#08251b; box-shadow:0 5px 18px #02090666; border-color:#9af1d5 }
+.pitch-button.charging { background:linear-gradient(120deg,#ffe2a0,#edbf65); color:#36250c }
+.sheet { box-shadow:0 24px 100px #0009; border:1px solid #38505c }
+button:disabled { filter:saturate(.6) }
+@media (max-width:699px) {
+  .game-shell { min-height:650px }
+  .arcade-ribbon { gap:5px; margin-bottom:5px }
+  .arcade-ribbon button { padding:6px 8px }
+  .tactics-hint { font-size:9px; margin:3px 0 4px }
+  .pitch-tactics button { min-height:34px }
+  .trait-picker { padding:12px }
+}
+@media (max-height:720px) and (max-width:699px) {
+  .game-shell { height:auto; min-height:100dvh }
+  .stadium-card { min-height:230px; flex:1 0 230px }
+}
+@media (prefers-reduced-motion:reduce) { .focus-trigger i, .challenge-grid button { transition:none } }

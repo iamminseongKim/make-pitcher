@@ -1,3 +1,4 @@
+import './arcade-regression'
 import assert from 'node:assert/strict'
 import {
   PITCHES, createFlight, createPreviewFlight, defaultProfile, pointOnFlight, newGame, applyOutcome, closeInning, loadSave, SAVE_KEY, resolvePitch,
@@ -159,15 +160,18 @@ p.created = true
 memory.set(SAVE_KEY, JSON.stringify({ profile: { ...p, difficulty: 'LEGEND' }, game: g, season: s, history }))
 assert.equal(loadSave().game.pitchLog.length, g.pitchLog.length); assert.equal(loadSave().season.games, 1); assert.equal(loadSave().history.length, 2)
 assert.equal('difficulty' in loadSave().profile, false, 'legacy difficulty modifier is dropped')
-const oldGame = { ...g } as Partial<typeof g>; delete oldGame.pitchLog; delete oldGame.totalOuts; delete oldGame.atBats; delete oldGame.memory; delete oldGame.confidence
+const oldGame = { ...g } as Partial<typeof g>; delete oldGame.pitchLog; delete oldGame.totalOuts; delete oldGame.atBats; delete oldGame.memory; delete oldGame.confidence; delete oldGame.arcade; delete oldGame.rivalArchive
 memory.set(SAVE_KEY, JSON.stringify({ profile: p, game: oldGame, season: { number: 1, tier: 1, games: 2 } }))
 assert.equal(loadSave().game.totalOuts, 27); assert.deepEqual(loadSave().game.pitchLog, []); assert.deepEqual(loadSave().game.memory, {})
+assert.equal(loadSave().game.arcade!.focus, 0); assert.deepEqual(loadSave().game.rivalArchive, {});
 assert.equal(loadSave().season.saves, 0); assert.deepEqual(loadSave().history, [])
 
 /* ── Batter AI: seeded distributions ── */
+// Hold the hitter constant: randomized rival archetypes must not change test baselines.
+const aiBatter = { ...g.lineup[3], bats: 'R' as const, contact: .62, power: .6, eye: .6, aggression: .6, zone: 'LOW' as const, weakness: 'NONE' as const }
 const hitsOver = (n: number, flight: () => PitchFlight, ctx: Partial<AtBatContext>, seed = 17) => {
   seeded(seed); let hits = 0, swings = 0
-  for (let i = 0; i < n; i++) { const r = resolvePitch(flight(), { batter: g.lineup[3], pitcherHand: 'R', balls: 1, strikes: 1, inning: 1, tier: 2, previous: null, seenTypes: [], seenSpeeds: [], fastest: f.speed, ...ctx }); if (HITS.includes(r.outcome)) hits++; if (r.swing) swings++ }
+  for (let i = 0; i < n; i++) { const r = resolvePitch(flight(), { batter: aiBatter, pitcherHand: 'R', balls: 1, strikes: 1, inning: 1, tier: 2, previous: null, seenTypes: [], seenSpeeds: [], fastest: f.speed, ...ctx }); if (HITS.includes(r.outcome)) hits++; if (r.swing) swings++ }
   Math.random = original; return { hits, swings }
 }
 // Hitter-count fastballs in a repeated location improve contact (in-PA memory).

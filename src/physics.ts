@@ -1,3 +1,4 @@
+import { traitActive, type Trait, type Effort } from './arcade'
 import { ageEffects } from './retirement'
 import { ARM_SLOTS, breakScale, clamp, dispersion, lerp, statSpeed, sweetSpot, type Grade, type PitchDefinition, type PitchStat, type PitcherProfile } from './game'
 
@@ -37,6 +38,9 @@ function rideMultiplier(p: PitcherProfile) {
 /* ───────────────────────── Flight model ───────────────────────── */
 
 export interface PitchFlight {
+  trait?: Trait
+  effort?: Effort
+  focused?: boolean
   pitch: PitchDefinition
   speed: number
   /** What the hitter's clock feels: extension shortens the effective distance. */
@@ -123,19 +127,21 @@ export function releaseQuality(meter: number, controlLevel: number) {
 const gauss = () => { let u = 0, v = 0; while (!u) u = Math.random(); while (!v) v = Math.random(); return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v) }
 
 /** @param meter needle position along its path (0–2). Values ≤ 1 behave like the old "power". */
-export function createFlight(pitch: PitchDefinition, stat: PitchStat, profile: PitcherProfile, target: { x: number; y: number }, meter: number): PitchFlight {
+export function createFlight(pitch: PitchDefinition, stat: PitchStat, profile: PitcherProfile, target: { x: number; y: number }, meter: number, options: { effort?: Effort; focused?: boolean } = {}): PitchFlight {
   const q = releaseQuality(meter, stat.controlLevel)
   const power = q.power
   // Fatigue: below 40 stamina the arm drags — velocity drops and command spreads.
   const tired = profile.stamina < 40 ? (40 - profile.stamina) / 40 * .45 : 0
   const overthrow = meter > .9 && meter <= 1 ? (meter - .9) * 1.8 : 0
   const aging = ageEffects(profile.age ?? 25)
-  const spread = dispersion(stat.controlLevel) * q.spreadMul * physiqueCost(profile.height).commandMul * aging.commandMul + tired * .4 + overthrow * .3
+  const trait = traitActive(stat)
+  const controlMul = (trait === 'command' ? .8 : 1) * (options.focused && q.grade === 'PERFECT' ? .55 : 1) * (options.effort === 'power' ? 1.3 : 1)
+  const spread = controlMul * dispersion(stat.controlLevel) * q.spreadMul * physiqueCost(profile.height).commandMul * aging.commandMul + tired * .4 + overthrow * .3
   const angle = Math.random() * Math.PI * 2
   const offset = spread * (.35 + Math.random() * .65)
   let movement = movementFor(pitch, stat, profile)
   let landing: { x: number; y: number }
-  let speed = statSpeed(pitch, stat) - aging.veloLoss - (1 - power) * 8 - tired * 9
+  let speed = statSpeed(pitch, stat) + (options.effort === 'power' ? 3 : 0) - aging.veloLoss - (1 - power) * 8 - tired * 9
   if (q.meatball) {
     // Critical miss: the ball slips, loses its bite and drifts belt-high over the heart of the plate.
     movement = { x: movement.x * .35, y: movement.y * .35 }
@@ -152,7 +158,7 @@ export function createFlight(pitch: PitchDefinition, stat: PitchStat, profile: P
   speed = Math.round(speed * 10) / 10
   const b = body(profile, speed), ivb = ivbCm(movement.y)
   return {
-    pitch, speed, perceivedSpeed: b.perceivedSpeed, grade: q.grade, duration: b.duration, target, landing,
+    trait, effort: options.effort, focused: options.focused, pitch, speed, perceivedSpeed: b.perceivedSpeed, grade: q.grade, duration: b.duration, target, landing,
     release: releasePoint(profile), movement, startedAt: performance.now(), control: stat.controlLevel, breakLevel: stat.breakLevel, power,
     timingError: q.error, meatball: q.meatball, ivb, vaa: approachAngle(b.releaseHeight, b.extension, speed, landing.y, ivb), extension: b.extension, releaseHeight: b.releaseHeight,
   }
@@ -162,7 +168,7 @@ export function createPreviewFlight(pitch: PitchDefinition, stat: PitchStat, pro
   const speed = Math.round((statSpeed(pitch, stat) - ageEffects(profile.age ?? 25).veloLoss) * 10) / 10
   const b = body(profile, speed), movement = movementFor(pitch, stat, profile), ivb = ivbCm(movement.y)
   return {
-    pitch, speed, perceivedSpeed: b.perceivedSpeed, grade: 'PERFECT', duration: b.duration, target, landing: target,
+    trait: traitActive(stat), pitch, speed, perceivedSpeed: b.perceivedSpeed, grade: 'PERFECT', duration: b.duration, target, landing: target,
     release: releasePoint(profile), movement, startedAt: 0, control: stat.controlLevel, breakLevel: stat.breakLevel, power: SWEET_CENTER,
     timingError: 0, meatball: false, ivb, vaa: approachAngle(b.releaseHeight, b.extension, speed, target.y, ivb), extension: b.extension, releaseHeight: b.releaseHeight,
   }

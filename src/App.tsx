@@ -1,3 +1,5 @@
+import { Challenge } from './Challenge'
+import { freshArcade, MISSIONS, performanceBonus, signatureText, traitActive, type Effort } from './arcade'
 import { sfx, disposeAudio } from './audio'
 import { TIERS, FEAT_TP, gameFeat, seasonAwards, loadUnlockedTier, saveUnlockedTier, aggregate, callUpSchedule, promotionStatus, seasonDone as isSeasonDone, formatIP, newSeason, recordGame, seasonRates, gameTeam, serviceTime, tierOf, type Season } from './season'
 import { PitchChart } from './PitchChart'
@@ -17,7 +19,7 @@ import {
 } from './game'
 import { renderScene, STAGE, type BatterAnim, type BattedBall } from './render'
 
-type Panel = 'none' | 'training' | 'career' | 'profile' | 'help' | 'legacy'
+type Panel = 'none' | 'training' | 'career' | 'profile' | 'help' | 'legacy' | 'challenge' | 'mission'
 type Phase = 'ready' | 'charging' | 'flying' | 'result'
 const initial = loadSave()
 const IDLE: BatterAnim = { kind: 'idle', at: 0, contact: false, barrel: { x: 0, y: 0 } }
@@ -57,6 +59,9 @@ function App() {
   const [target, setTarget] = useState({ x: .45, y: .45 })
   const [panel, setPanel] = useState<Panel>('none')
   const [trainingPitch, setTrainingPitch] = useState<PitchType>(selected)
+  const [effort, setEffort] = useState<Effort>('normal')
+  const [focused, setFocused] = useState(false)
+  const pitchMode = useRef({ effort: 'normal' as Effort, focused: false })
   const [phase, setPhase] = useState<Phase>('ready')
   const [callout, setCallout] = useState<{ main: string; sub: string; tone: string }>({ main: 'PLAY BALL', sub: '코스를 찍고 투구', tone: 'ready' })
   const [soundOn, setSoundOn] = useState(true)
@@ -88,6 +93,8 @@ function App() {
   const launchRef = useRef<(meter: number) => void>(() => {})
   const lastTapRef = useRef(0)
 
+  const arcade = game.arcade ?? freshArcade()
+  const mission = MISSIONS.find(m => m.id === arcade.mission)
   const pitch = pitchById(selected)
   const stat = profile.arsenal[selected]
   const batter = game.lineup[game.batterIndex]
@@ -109,7 +116,8 @@ function App() {
   const preview = profile.created && stat.unlocked ? createPreviewFlight(pitch, stat, profile, target) : null
   const tunnel = preview ? tunnelRead(preview, lastFlightRef.current) : { score: 0, early: 0, late: 0, pair: false }
   const readRisk = batterAdaptation(prior, selected, target).level
-  const fastest = Math.max(...PITCHES.filter(p => profile.arsenal[p.id].unlocked && p.family === 'FASTBALL').map(p => statSpeed(p, profile.arsenal[p.id])), 125)
+  const fastballs = PITCHES.filter(p => profile.arsenal[p.id].unlocked && p.family === 'FASTBALL')
+  const fastest = Math.max(...(fastballs.length ? fastballs : PITCHES.filter(p => profile.arsenal[p.id].unlocked)).map(p => statSpeed(p, profile.arsenal[p.id])), 100)
   const showingMemory = showMemory && prior.length > 0
 
   sceneRef.current = {
@@ -131,7 +139,8 @@ function App() {
     const r = pendingRef.current!
     pendingRef.current = null
     flightRef.current = null
-    const { game: next, events: ev, call } = applyOutcome(game, f, r)
+    const spent = f.focused ? { ...game, arcade: { ...arcade, focus: Math.max(0, arcade.focus - 100) } } : game
+    const { game: next, events: ev, call } = applyOutcome(spent, f, r)
     const reward = Math.round(ev.reward * league.tp * aging.tpMul)
     seenRef.current = ev.paEnded ? { speeds: [], types: [] } : { speeds: [...seenRef.current.speeds, f.speed], types: [...seenRef.current.types, f.pitch.id] }
     lastFlightRef.current = ev.paEnded ? null : f
@@ -146,13 +155,15 @@ function App() {
     } else battedRef.current = null
     if (!r.swing) animRef.current = { ...animRef.current, kind: o === 'HIT_BY_PITCH' ? 'hbp' : 'take', at: performance.now() }
 
+    setFocused(false)
+    const technique = next.arcade?.techniques.join(' · ') ?? ''
     const tag = r.tags.filter(t => !call.text.includes(t)).slice(0, 2).join(' · ')
     resultRef.current = { text: ev.immaculate ? 'IMMACULATE INNING!' : ev.strikeout && o === 'SWINGING_STRIKE' ? 'STRIKE THREE!' : o === 'SWINGING_STRIKE' ? (r.tags.includes('유인구') ? 'CHASE!' : 'SWING & MISS') : r.tags.includes('코너 꽉 찬 공') ? 'PAINTED THE CORNER' : call.text.split(' · ')[0], tone: call.tone, at: performance.now() }
-    setCallout({ main: call.text, sub: [tag, `${f.pitch.short} ${f.speed.toFixed(0)}km`].filter(Boolean).join(' · '), tone: call.tone })
+    setCallout({ main: call.text, sub: [technique || tag, `${f.pitch.short} ${f.speed.toFixed(0)}km`].filter(Boolean).join(' · '), tone: call.tone })
     playOutcome(call, o, f)
     if (reward) setTpPop({ n: reward, key: performance.now() })
 
-    const stamina = clamp(profile.stamina - staminaCost(f.timingError + SWEET_CENTER, game, profile.height, profile.age) + (ev.inningOver ? STAMINA.inningRest : 0), 0, 100)
+    const stamina = clamp(profile.stamina - staminaCost(f.timingError + SWEET_CENTER, game, profile.height, profile.age) - (f.effort === 'power' ? 1.2 : 0) + (ev.inningOver ? STAMINA.inningRest : 0), 0, 100)
     setProfile(prev => ({
       ...prev, trainingPoints: prev.trainingPoints + reward, stamina,
       arsenal: { ...prev.arsenal, [f.pitch.id]: { ...prev.arsenal[f.pitch.id], mastery: prev.arsenal[f.pitch.id].mastery + ev.mastery } },
@@ -192,7 +203,7 @@ function App() {
     const tick = (now: number) => {
       const started = meterStartedAtRef.current
       // Needle sweeps up (0→1) and back (1→2); the path position is the timing, the height is the power.
-      const meter = started === null ? 0 : (now - started) / 1150
+      const meter = started === null ? 0 : (now - started) / (pitchMode.current.focused ? 1550 : pitchMode.current.effort === 'power' ? 950 : 1150)
       const needle = meter <= 1 ? meter : Math.max(0, 2 - meter)
       meterRef.current = meter
       if (gaugeFillRef.current) gaugeFillRef.current.style.width = `${needle * 100}%`
@@ -201,7 +212,7 @@ function App() {
       if (started !== null && meter >= 2) launchRef.current(2)
       const f = flightRef.current
       const raw = f ? (now - f.startedAt) / f.duration : 0
-      const cinematic = !reducedMotion() && pendingRef.current?.outcome === 'SWINGING_STRIKE' && sceneRef.current?.strikeoutChance
+      const cinematic = !reducedMotion() && pendingRef.current?.outcome === 'SWINGING_STRIKE' && sceneRef.current?.strikeoutChance && (pitchMode.current.focused || (sceneRef.current?.tunnel ?? 0) > .45)
       const t = clamp(cinematic && raw > .7 ? .7 + (raw - .7) * .35 : raw, 0, 1)
       const scene = sceneRef.current
       if (scene) renderScene(ctx, { ...scene, flight: f, flightProgress: t, anim: animRef.current, batted: battedRef.current, result: resultRef.current, log: logOverrideRef.current ?? scene.log, now })
@@ -217,7 +228,7 @@ function App() {
     if (meterStartedAtRef.current === null || flightRef.current) return
     meterStartedAtRef.current = null
     gaugeElRef.current?.classList.remove('returning')
-    const f = createFlight(pitch, stat, profile, target, meter)
+    const f = createFlight(pitch, stat, profile, target, meter, pitchMode.current)
     const r = resolvePitch(f, {
       batter, pitcherHand: profile.hand, balls: game.balls, strikes: game.strikes, inning: game.inning, tier: game.tier,
       previous: lastFlightRef.current, seenSpeeds: seenRef.current.speeds, seenTypes: seenRef.current.types, fastest, history: game.abLog,
@@ -226,7 +237,7 @@ function App() {
     pendingRef.current = r
     logOverrideRef.current = null
     battedRef.current = null
-    const slowK = r.outcome === 'SWINGING_STRIKE' && game.strikes === 2 && !reducedMotion()
+    const slowK = r.outcome === 'SWINGING_STRIKE' && game.strikes === 2 && !reducedMotion() && (pitchMode.current.focused || tunnel.score > .45)
     animRef.current = r.swing ? { kind: 'swing', at: f.startedAt + f.duration * (slowK ? .7 + .3 / .35 : 1), contact: r.outcome !== 'SWINGING_STRIKE', barrel: r.barrel } : { ...IDLE, barrel: r.barrel }
     flightRef.current = f
     setPhase('flying')
@@ -240,7 +251,7 @@ function App() {
     const now = performance.now()
     if (now - lastTapRef.current < 160) return
     lastTapRef.current = now
-    if (meterStartedAtRef.current === null) { meterStartedAtRef.current = now; setPhase('charging') }
+    if (meterStartedAtRef.current === null) { pitchMode.current = { effort, focused }; meterStartedAtRef.current = now; setPhase('charging') }
     else launch(meterRef.current)
   }
   useEffect(() => {
@@ -256,7 +267,7 @@ function App() {
     const y = (event.clientY - rect.top) / rect.height * STAGE.height
     setTarget({ x: clamp((x - STAGE.zoneX) / (STAGE.zoneW / 2), -1.7, 1.7), y: clamp((y - STAGE.zoneY) / (STAGE.zoneH / 2), -1.7, 1.7) })
   }
-  const openPanel = (p: Panel) => { meterStartedAtRef.current = null; if (phase === 'charging') setPhase('ready'); setPanel(p) }
+  const openPanel = (p: Panel) => { if (phase === 'flying') return; meterStartedAtRef.current = null; if (phase === 'charging') setPhase('ready'); setPanel(p) }
   const upgrade = (key: StatKey) => {
     const level = profile.arsenal[trainingPitch][key], cost = upgradeCost(level)
     if (level >= 99 || profile.trainingPoints < cost) return
@@ -270,7 +281,7 @@ function App() {
     setSelected(trainingPitch); sfx('k', soundOn)
   }
   const resetAtBatRefs = () => {
-    lastFlightRef.current = null; seenRef.current = { speeds: [], types: [] }; logOverrideRef.current = null; animRef.current = IDLE
+    setFocused(false); lastFlightRef.current = null; seenRef.current = { speeds: [], types: [] }; logOverrideRef.current = null; animRef.current = IDLE
   }
   type Move = 'next' | 'promote' | 'repeat' | 'demote' | 'callup'
   const continueGame = (move: Move = 'next') => {
@@ -278,7 +289,7 @@ function App() {
     if (summary.finished) {
       const win = summary.finished === 'WIN', loss = summary.finished === 'LOSS'
       const feat = gameFeat(game)
-      const bonus = Math.round(((win ? 150 : loss ? 40 : 70) + (feat ? FEAT_TP[feat] : 0)) * league.tp * aging.tpMul)
+      const bonus = Math.round(((win ? 150 : loss ? 40 : 70) + performanceBonus(game) + (feat ? FEAT_TP[feat] : 0)) * league.tp * aging.tpMul)
       const fatigue = fatigueAfter(game, profile.stamina)
       setProfile(p => ({ ...p, trainingPoints: p.trainingPoints + bonus, fatigue, stamina: 100 - fatigue }))
       let nextSeason = seasonView
@@ -374,6 +385,10 @@ function App() {
 
         <div className="tier-banner" aria-label={`현재 리그: ${league.label}`}><b>{league.short}</b><span>{league.label}</span><em>TP ×{league.tp.toFixed(1)}</em></div>
 
+        <div className="arcade-ribbon">
+          <button disabled={phase !== 'ready' || Boolean(summary) || hook} onClick={() => openPanel('mission')}><span>등판 목표</span><b>{mission ? `${mission.title} ${arcade.progress}/${mission.goal}${arcade.completed ? ' ✓' : ''}` : game.pitches ? '이번 등판 목표 없음' : '오늘의 도전 선택 →'}</b></button>
+          <button disabled={phase === 'flying' || phase === 'charging'} onClick={() => openPanel('challenge')}><span>QUICK PLAY</span><b>챌린지 ↗</b></button>
+        </div>
         <div className="scorebug">
           <div className="teams">
             <div><i style={{ background: team.color }} /><span>{team.short}</span><b>{game.runsAgainst}</b></div>
@@ -397,7 +412,7 @@ function App() {
           <canvas ref={canvasRef} className="stadium-canvas" onPointerDown={aim} aria-label="스트라이크 존. 터치해서 코스를 고르세요." />
           <div className={`batter-card ${side === 'R' ? 'left' : 'right'}`}>
             <div className="batter-top"><span className="order">{batter.order}</span><strong>{batter.name}</strong><span className={`hand hand-${side}`}>{handLabel}</span></div>
-            <div className="batter-line">{batter.avg.toFixed(3).slice(1)} · {batter.hr}HR{prior.length > 0 && <em> · {prior.length + 1}번째 대결</em>}</div>
+            <div className="batter-line">{batter.id.startsWith('rival-') && <em className="rival-label">RIVAL · </em>}{batter.avg.toFixed(3).slice(1)} · {batter.hr}HR{prior.length > 0 && <em> · {prior.length + 1}번째 대결</em>}</div>
             <div className={`mood mood-${mood.toLowerCase()}`} aria-label={`타자 기세: ${MOOD_LABEL[mood]}`}><span><i style={{ left: `${(confidence + 1) * 50}%` }} /></span><b>{MOOD_LABEL[mood]}</b></div>
             <div className="scout-line"><Eye size={10} /> {report[prior.length ? Math.min(2, report.length - 1) : 0]}</div>
           </div>
@@ -425,6 +440,11 @@ function App() {
         </div>
 
         <section className="control-card">
+          <div className="pitch-tactics">
+            <div className="effort-switch" aria-label="투구 강도">{(['normal', 'power'] as const).map(mode => <button key={mode} aria-pressed={effort === mode} disabled={phase !== 'ready'} onClick={() => setEffort(mode)}>{mode === 'normal' ? '안정' : '전력 +3km'}</button>)}</div>
+            <button className={`focus-trigger ${focused ? 'armed' : ''}`} disabled={arcade.focus < 100 || phase !== 'ready'} aria-pressed={focused} onClick={() => setFocused(v => !v)}><i style={{ width: `${arcade.focus}%` }} /><span>{focused ? '집중 장전 ✓' : arcade.focus >= 100 ? '집중 투구 사용' : `집중 ${arcade.focus}%`}</span></button>
+          </div>
+          <p className="tactics-hint">{focused ? '다음 한 공 · 느린 미터 + PERFECT 제구 강화' : effort === 'power' ? '빠른 미터 · 탄착 분산 +30% · 체력 추가 소모 1.2' : '배합 성공과 아웃으로 집중 충전 · 100%에서 사용'}</p>
           <div className={`callout tone-${callout.tone}`} aria-live="polite"><b>{phase === 'charging' ? 'RELEASE' : callout.main}</b><span>{phase === 'charging' ? '황금 구간에서 탭 · 빨간 구간은 실투' : callout.sub}</span></div>
           {preview && phase !== 'charging' && <div className="metrics">
             <span title="익스텐션 반영 체감 구속"><small>체감</small>{preview.perceivedSpeed.toFixed(1)}</span>
@@ -453,6 +473,7 @@ function App() {
           <span className="eyebrow">SCOUTING REPORT</span>
           <h2>{batter.order}번 {batter.name} <small>{handLabel}</small></h2>
           <p className="muted">{batter.avg.toFixed(3).slice(1)} · {batter.hr}HR · {ZONE_LABEL[batter.zone]}{batter.weakness !== 'NONE' ? ` · ${WEAK_LABEL[batter.weakness]}` : ''}</p>
+          {batter.id.startsWith('rival-') && <p className="rival-note">{['끈질긴 교타자', '초구를 노리는 장타자', '냉정한 선구안'][Number(batter.id.split('-').at(-1))]} · {game.rivalArchive?.[batter.id]?.length ? `지난 경기: ${game.rivalArchive[batter.id].map(pa => pa.result).join(' / ')}` : '첫 라이벌 대결'}</p>}
           <ul className="report">{report.map(n => <li key={n}>{n}</li>)}</ul>
           <div className={`mood wide mood-${mood.toLowerCase()}`}><span><i style={{ left: `${(confidence + 1) * 50}%` }} /></span><b>{MOOD_LABEL[mood]}</b></div>
         </div>
@@ -476,6 +497,7 @@ function App() {
       {!summary.finished && summary.immaculate && <p className="special-tp">무결점 이닝 · 9구 3삼진 <b>+{Math.round(SPECIAL_TP.immaculate * league.tp * aging.tpMul)} TP</b></p>}
       {summary.finished && (gameFeat(game) || (game.feats ?? []).length > 0) && <p className="special-tp">{[...(game.feats ?? []), gameFeat(game)].filter(Boolean).join(' · ')}{gameFeat(game) && <b> +{Math.round(FEAT_TP[gameFeat(game)!] * league.tp * aging.tpMul)} TP</b>}</p>}
       {summary.finished && game.pulled && <p className="inning-note">{formatIP(game.totalOuts)}이닝 후 강판 · 불펜 {game.bullpenRuns}실점 · 교체 시점 {game.exitLead > 0 ? `${game.exitLead}점 리드` : game.exitLead < 0 ? `${-game.exitLead}점 열세` : '동점'}</p>}
+      {summary.finished && <div className="performance-card"><span>YOUR PERFORMANCE</span><strong>개인 활약 +{Math.round(performanceBonus(game) * league.tp * aging.tpMul)} TP</strong><small>기술 보상 {arcade.points} TP (기본값) · {arcade.completed ? '등판 목표 달성' : '다음 등판에서 다시 도전'}</small></div>}
       {summary.finished && <p className="fatigue-note">다음 등판 시작 체력 <b>{100 - fatigueAfter(game, profile.stamina)}</b>{fatigueAfter(game, profile.stamina) > 0 ? ' · 혹사 여파' : ' · 정상 휴식'}</p>}
       {summary.finished && <p className="inning-note">{formatIP(game.totalOuts)} IP · {game.strikeouts}K · {game.hits}피안타 · {game.homeRuns ?? 0}HR · {game.walks}볼넷 · {game.pitches}구</p>}
       {summary.finished && <><PitchChart pitches={game.pitchLog} /><div className="season-stats">{Object.entries(seasonRates(seasonView)).slice(0, 4).map(([k, v]) => <div key={k}><small>{k}</small><strong>{v}</strong></div>)}</div><p>Season {season.number} · {seasonView.games}/{seasonView.scheduled} games · {seasonView.wins}W–{seasonView.losses}L{seasonView.saves ? ` · ${seasonView.saves}SV` : ''}</p>
@@ -516,21 +538,25 @@ function App() {
       onLegacy={() => setPanel('legacy')} legacyCount={legacy.length} onRetire={retireStat.canRetire && phase !== 'flying' ? () => retire('VOLUNTARY') : null} />}
     {panel === 'legacy' && <LegacyHall legacy={legacy} onClose={() => setPanel(profile.created ? 'career' : 'none')} />}
     {retired && <RetirementSheet player={retired} legacy={legacy} onNext={() => { resetAll(); setRetired(null) }} />}
+    {panel === 'challenge' && <Challenge onClose={() => setPanel('none')} />}
+    {panel === 'mission' && <div className="overlay"><section className="sheet" role="dialog" aria-modal="true" aria-label="등판 목표"><div className="sheet-top"><span className="eyebrow">START WITH A PURPOSE</span><button className="secondary-button" onClick={() => setPanel('none')}>닫기</button></div><h1>오늘은 어떤 에이스?</h1><p className="muted">첫 투구 전에 하나 선택 · 달성 +60 TP × 리그·나이 배율 · 실패 페널티 없음</p><div className="challenge-grid">{MISSIONS.map(m => <button key={m.id} disabled={game.pitches > 0 || (m.id === 'variety' && unlocked.length < 2)} aria-pressed={arcade.mission === m.id} onClick={() => { setGame(g => ({ ...g, arcade: { ...(g.arcade ?? freshArcade()), mission: m.id } })); setPanel('none') }}><strong>{m.title}</strong><span>{m.text}</span><small>{m.id === 'variety' && unlocked.length < 2 ? '구종 2개 해금 필요' : arcade.mission === m.id ? '선택됨' : '도전 선택'}</small></button>)}</div>{game.pitches > 0 && <p>이미 시작한 등판의 목표는 변경할 수 없습니다.</p>}</section></div>}
     {panel === 'training' && <div className="overlay" onPointerDown={e => { if (e.target === e.currentTarget) setPanel('none') }}><section className="sheet training-sheet" role="dialog" aria-modal="true" aria-label="훈련실">
       <div className="sheet-top"><span className="eyebrow">PITCH LAB</span><button className="icon-button" onClick={() => setPanel('none')} aria-label="닫기"><ArrowLeft size={18} /></button></div>
       <div className="sheet-title"><h1>훈련실</h1><div className="tp-large"><Zap size={16} fill="currentColor" /> {profile.trainingPoints} <small>TP</small></div></div>
       <div className="training-tabs">{PITCHES.map(p => <button key={p.id} className={trainingPitch === p.id ? 'active' : ''} onClick={() => setTrainingPitch(p.id)}>{p.short}{!profile.arsenal[p.id].unlocked && <LockKeyhole size={10} />}</button>)}</div>
       {(() => {
         const p = pitchById(trainingPitch), s = profile.arsenal[trainingPitch]
-        const moveCm = Math.round(Math.hypot(p.moveX, p.moveY) * breakScale(s.breakLevel))
+        const moveCm = (Math.hypot(p.moveX, p.moveY) * breakScale(s.breakLevel)).toFixed(1)
         return <>
           <div className="training-feature" style={{ '--pitch-color': p.color } as CSSProperties}><span className="feature-orb">⚾</span><div><small>{p.family} · {s.unlocked ? `숙련 Lv.${masteryLevel(s.mastery)}` : 'LOCKED'}</small><h2>{p.name}</h2><p>{p.description}</p></div><b>{s.unlocked ? statSpeed(p, s).toFixed(1) : '–'} <small>KM/H · {moveCm}CM</small></b></div>
+          {s.unlocked && <div className="trait-picker"><span className="eyebrow">MASTERY / 숙련 Lv.4 해금</span><p>{s.mastery < 225 ? `특성까지 ${225 - s.mastery} XP` : '구종당 특성 하나 · 등판 사이에 자유롭게 변경'}</p><div>{(['command', 'signature'] as const).map(trait => <button key={trait} aria-pressed={traitActive(s) === trait} disabled={s.mastery < 225 || (game.pitches > 0 && !game.over)} onClick={() => setProfile(p => ({ ...p, arsenal: { ...p.arsenal, [trainingPitch]: { ...p.arsenal[trainingPitch], trait } } }))}><strong>{trait === 'command' ? '핀포인트' : '시그니처'}</strong><small>{trait === 'command' ? '기본 탄착 분산 20% 감소' : signatureText(trainingPitch)}</small></button>)}</div></div>}
           {s.unlocked ? <div className="upgrade-list">{(['velocityLevel', 'controlLevel', 'breakLevel'] as StatKey[]).map(key => {
             const level = s[key], cost = upgradeCost(level), isMax = level >= 99
-            return <div className="upgrade-row" key={key}><div className="upgrade-icon">{key === 'velocityLevel' ? <Zap size={18} /> : key === 'controlLevel' ? <Crosshair size={18} /> : <Sparkles size={18} />}</div><div className="upgrade-info"><div><strong>{LABELS[key].label}</strong><span>LV.{level}</span></div><small>{LABELS[key].hint}</small><div className="upgrade-track"><span style={{ width: `${level}%` }} /></div></div><button onClick={() => upgrade(key)} disabled={isMax || profile.trainingPoints < cost}>{isMax ? 'MAX' : <>{cost} <Zap size={12} fill="currentColor" /></>}</button></div>
+            return <div className="upgrade-row" key={key}><div className="upgrade-icon">{key === 'velocityLevel' ? <Zap size={18} /> : key === 'controlLevel' ? <Crosshair size={18} /> : <Sparkles size={18} />}</div><div className="upgrade-info"><div><strong>{LABELS[key].label}</strong><span>LV.{level}</span></div><small>{isMax ? '최고 단계' : key === 'velocityLevel' ? `${statSpeed(p, s).toFixed(1)} → ${statSpeed(p, { ...s, velocityLevel: level + 1 }).toFixed(1)} km/h` : key === 'controlLevel' ? `PERFECT ${(sweetSpot(level) * 100).toFixed(1)} → ${(sweetSpot(level + 1) * 100).toFixed(1)}%` : `변화량 ${moveCm} → ${(Math.hypot(p.moveX, p.moveY) * breakScale(level + 1)).toFixed(1)} cm`} · {LABELS[key].hint}</small><div className="upgrade-track"><span style={{ width: `${level}%` }} /></div></div><button aria-label={`${LABELS[key].label} 강화 ${cost} TP`} onClick={() => upgrade(key)} disabled={isMax || profile.trainingPoints < cost}>{isMax ? 'MAX' : <>{cost} <Zap size={12} fill="currentColor" /></>}</button></div>
           })}</div> : <div className="unlock-area"><LockKeyhole size={22} /><p>새 무기를 장착하세요.</p><button className="primary-button" disabled={profile.trainingPoints < p.unlockCost} onClick={unlock}>{p.unlockCost} TP 해금 <ArrowRight size={17} /></button></div>}
         </>
       })()}
+      <div className="velocity-lab"><span className="eyebrow">VELOCITY MAP / 구속 분포</span><p>현재 보유 구종의 기본 구속 · 기준 구속과의 간격을 함께 보세요.</p>{PITCHES.filter(d => profile.arsenal[d.id].unlocked).map(d => { const speed = statSpeed(d, profile.arsenal[d.id]); return <div key={d.id}><span>{d.short}</span><i><b style={{ width: `${(speed - 90) / 85 * 100}%`, background: d.color }} /></i><strong>{speed.toFixed(1)}</strong><small>{(speed - fastest).toFixed(1)} km</small></div> })}<p>큰 차이도 구종을 읽히면 적응합니다. 파울은 구속 차이만으로 결정되지 않으며, 체인지업은 빨라질수록 직구와의 간격이 줄 수 있습니다.</p></div>
       <div className="training-foot"><span>LV.{pitcherLevel(profile)} · 통산 {careerLine.strikeouts}K · {formatIP(careerLine.outs)}이닝</span></div>
     </section></div>}
     {panel === 'help' && <div className="overlay" onPointerDown={e => { if (e.target === e.currentTarget) setPanel('none') }}><section className="sheet help-sheet" role="dialog" aria-modal="true" aria-label="승부의 기술">
