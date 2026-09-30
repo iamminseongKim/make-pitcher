@@ -550,7 +550,7 @@ function App() {
           </div>
           {advanced && <div className={`mind-chip ${side === 'R' ? 'right' : 'left'}`}>
             <span>{matchup}</span>
-            <b>{batterMindset({ balls: game.balls, strikes: game.strikes, seenTypes: seenRef.current.types })}</b>
+            <b>{batterMindset({ balls: game.balls, strikes: game.strikes, history: game.abLog, memory: prior })}</b>
           </div>}
           {leverage && <div className="leverage">{leverage}</div>}
           <div className="stage-toggles">

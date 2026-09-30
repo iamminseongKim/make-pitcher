@@ -176,12 +176,16 @@ export function createPreviewFlight(pitch: PitchDefinition, stat: PitchStat, pro
   }
 }
 
-/** Integrated, continuous acceleration: no breakpoint or velocity discontinuity. */
-export const movementProgress = (f: PitchFlight, t: number) => Math.pow(clamp(t, 0, 1), 2 + f.pitch.late * 2 + breakScale(f.breakLevel) * .7)
+/** Each pitch bends continuously; hard fastball variants hold their line longer, while a curve falls earlier. */
+const PATH_POWER: Record<PitchDefinition['id'], number> = {
+  FOUR_SEAM: 3.1, SINKER: 3.25, CUTTER: 3.55, SPLITTER: 3.65,
+  CHANGEUP: 2.7, SLIDER: 2.85, CURVE: 2.1, SWEEPER: 2.65,
+}
+export const movementProgress = (f: PitchFlight, t: number) => Math.pow(clamp(t, 0, 1), PATH_POWER[f.pitch.id] + (breakScale(f.breakLevel) - .5) * .35)
 export function pointOnFlight(f: PitchFlight, progress: number) {
   const t = clamp(progress, 0, 1), bend = movementProgress(f, t)
   const shape = f.slot ? ARM_SLOTS[f.slot] : ARM_SLOTS.THREE_QUARTER
-  const gravity = shape.hop + (f.pitch.id === 'CURVE' ? .18 : 0)
+  const gravity = shape.hop + (f.pitch.id === 'CURVE' ? .38 * (.55 + breakScale(f.breakLevel) * .45) : 0)
   // Low slots sweep out toward the arm side and come back across the plate (crossfire).
   const bow = shape.bow * Math.sign(f.release.x) * t * (1 - t)
   return { x: lerp(f.release.x, f.landing.x, t) + f.movement.x * (bend - t) + bow,

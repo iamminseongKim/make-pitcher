@@ -3,7 +3,7 @@ import './commute-regression'
 import assert from 'node:assert/strict'
 import {
   PITCHES, createFlight, createPreviewFlight, defaultProfile, pointOnFlight, newGame, applyOutcome, closeInning, loadSave, SAVE_KEY, resolvePitch,
-  releaseQuality, SWEET_CENTER, sweetSpot, batterAdaptation, tunnelRead, extensionOf, releaseHeightOf, zoneCell, scoutingReport, batterSide, HITS,
+  releaseQuality, SWEET_CENTER, sweetSpot, batterAdaptation, batterPlan, tunnelRead, extensionOf, releaseHeightOf, zoneCell, scoutingReport, batterSide, HITS,
   physiqueCost, staminaCost, needsHook, canRefuseHook, fatigueAfter, bullpenFinish, pitcherDecision, STAMINA,
   type PitchFlight, type PitchResult, type PlateAppearance, type PitchLog, type AtBatContext,
 } from '../src/game'
@@ -31,6 +31,24 @@ for (const hand of ['R', 'L'] as const) for (const slot of ['OVERHAND', 'THREE_Q
   assert(Number.isFinite(f.vaa) && f.vaa < 0, 'VAA is a descending angle')
 }
 p.hand = 'R'; p.armSlot = 'THREE_QUARTER'
+
+/* ── Pitch silhouettes: smooth paths with distinct, handed movement ── */
+{
+  const stat = { unlocked: true, velocityLevel: 50, controlLevel: 50, breakLevel: 50, mastery: 0 }
+  const right = { ...defaultProfile(), hand: 'R' as const, armSlot: 'OVERHAND' as const }
+  const left = { ...right, hand: 'L' as const }
+  const path = (id: typeof PITCHES[number]['id'], profile = right, level = 50) => {
+    const flight = createPreviewFlight(PITCHES.find(d => d.id === id)!, { ...stat, breakLevel: level }, profile, { x: 0, y: 0 })
+    const p = pointOnFlight(flight, .72)
+    return { flight, p, linearX: flight.release.x * .28, linearY: flight.release.y * .28 }
+  }
+  const sinker = path('SINKER'), cutter = path('CUTTER'), curve = path('CURVE'), four = path('FOUR_SEAM')
+  assert(sinker.p.x - sinker.linearX > .05 && cutter.p.x - cutter.linearX < -.05, 'sinker and cutter peel in opposite directions')
+  assert(path('SINKER', left).p.x - path('SINKER', left).linearX < -.05, 'arm-side run mirrors for a lefty')
+  assert(curve.p.y - curve.linearY < four.p.y - four.linearY - .25, 'curve has a clear vertical drop')
+  assert(Math.abs(path('SLIDER').p.x - path('SLIDER').linearX) > Math.abs(cutter.p.x - cutter.linearX), 'slider sweeps farther than cutter')
+  assert(Math.abs(path('SLIDER', right, 99).p.x - path('SLIDER', right, 99).linearX) > Math.abs(path('SLIDER', right, 1).p.x - path('SLIDER', right, 1).linearX), 'movement stat strengthens the same shape')
+}
 
 /* ── Release meter: strict, continuous dispersion and critical miss ── */
 {
@@ -171,6 +189,17 @@ assert.equal(loadSave().game.arcade!.focus, 0); assert.deepEqual(loadSave().game
 assert.equal(loadSave().season.saves, 0); assert.deepEqual(loadSave().history, [])
 
 /* ── Batter AI: seeded distributions ── */
+{
+  for (let balls = 0; balls <= 3; balls++) for (let strikes = 0; strikes <= 2; strikes++) {
+    const plan = batterPlan({ balls, strikes, fastest: 150 })
+    assert(plan.fastballChance > 0 && plan.fastballChance < 1 && Number.isFinite(plan.expectedSpeed), `${balls}-${strikes} has a usable read`)
+  }
+  const fast: PitchLog = { pitch: 'FOUR_SEAM', speed: 150, x: 0, y: 0, px: 0, py: 0, call: '', tag: '' }
+  const afterOne = batterPlan({ balls: 0, strikes: 1, history: [fast], fastest: 150 })
+  const afterTwo = batterPlan({ balls: 0, strikes: 2, history: [fast, fast], fastest: 150 })
+  assert(!afterOne.expectFastball && afterTwo.expectFastball, 'one fastball suggests a change; repetition becomes a pattern')
+  assert(batterPlan({ balls: 3, strikes: 0 }).fastballChance > batterPlan({ balls: 0, strikes: 2 }).fastballChance, 'count shifts the hitter’s guess')
+}
 // Hold the hitter constant: randomized rival archetypes must not change test baselines.
 const aiBatter = { ...g.lineup[3], bats: 'R' as const, contact: .62, power: .6, eye: .6, aggression: .6, zone: 'LOW' as const, weakness: 'NONE' as const }
 const hitsOver = (n: number, flight: () => PitchFlight, ctx: Partial<AtBatContext>, seed = 17) => {

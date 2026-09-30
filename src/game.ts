@@ -89,7 +89,7 @@ export const statSpeed = (pitch: PitchDefinition, stat: PitchStat) => Math.round
 /** Width of the PERFECT window on the release meter (fraction of the gauge). */
 export const sweetSpot = (level: number) => lerp(.08, .22, (level - 1) / 98)
 export const dispersion = (level: number) => lerp(.62, .035, (level - 1) / 98)
-export const breakScale = (level: number) => lerp(.34, 1, (level - 1) / 98)
+export const breakScale = (level: number) => lerp(.5, 1, (level - 1) / 98)
 export const upgradeCost = (level: number) => Math.round(18 + Math.pow(level, 1.48) * 2.4)
 export const pitcherLevel = (p: PitcherProfile) => Math.max(1, Math.floor(Object.values(p.arsenal).reduce((n, s) => n + (s.velocityLevel + s.controlLevel + s.breakLevel - 3), 0) / 5) + 1)
 export const masteryLevel = (xp: number) => Math.floor(Math.sqrt(xp / 25)) + 1
@@ -485,6 +485,33 @@ export const inZone = (p: { x: number; y: number }, pad = 0) => Math.abs(p.x) <=
 /** "Rise" illusion of a four-seamer: more IVB than the hitter's eye expects from that release, amplified by a steep plane. */
 export const riseIllusion = (f: PitchFlight) => f.pitch.id === 'FOUR_SEAM' ? clamp((f.ivb - 30) / 22, 0, 1) * (.6 + .4 * planeSteepness(f.releaseHeight)) : 0
 
+/** A hitter's pre-pitch guess. Count supplies a prior; this plate appearance and earlier looks update it. */
+export function batterPlan(c: Pick<AtBatContext, 'balls' | 'strikes'> & { history?: PitchLog[]; memory?: PlateAppearance[]; seenTypes?: PitchType[]; fastest?: number }) {
+  const byCount = [
+    [.55, .50, .36], // 0 balls
+    [.60, .54, .41],
+    [.72, .62, .46],
+    [.82, .74, .57], // 3 balls: walking the hitter constrains the pitcher
+  ]
+  const recent = c.history?.map(p => p.pitch) ?? c.seenTypes ?? []
+  const prior = (c.memory ?? []).flatMap(pa => pa.pitches).map(p => p.pitch)
+  const seen = [...prior, ...recent]
+  let fastballChance = byCount[clamp(c.balls, 0, 3)][clamp(c.strikes, 0, 2)]
+  if (seen.length) fastballChance += (seen.filter(t => pitchById(t).family === 'FASTBALL').length / seen.length - .5) * .12
+  const last = recent.at(-1)
+  if (last) fastballChance += pitchById(last).family === 'FASTBALL' ? -.14 : .12
+  if (recent.length >= 2 && pitchById(recent.at(-2)!).family === pitchById(last!).family) {
+    fastballChance += pitchById(last!).family === 'FASTBALL' ? .32 : -.18
+  }
+  fastballChance = clamp(fastballChance, .16, .88)
+  const expectFastball = fastballChance >= .5
+  const conviction = clamp(.2 + Math.abs(fastballChance - .5) * 1.25 + (recent.length >= 2 && pitchById(recent.at(-2)!).family === pitchById(last!).family ? .1 : 0), .2, .75)
+  const secondarySpeeds = [...(c.memory ?? []).flatMap(pa => pa.pitches), ...(c.history ?? [])].filter(p => pitchById(p.pitch).family !== 'FASTBALL').map(p => p.speed)
+  const fastest = c.fastest ?? 145
+  const expectedSpeed = expectFastball ? fastest - 1 : secondarySpeeds.length ? secondarySpeeds.reduce((a, n) => a + n, 0) / secondarySpeeds.length : Math.max(95, fastest - 16)
+  return { fastballChance, expectFastball, conviction, expectedSpeed }
+}
+
 export function resolvePitch(f: PitchFlight, c: AtBatContext): PitchResult {
   const b = c.batter
   const league = tierOf(c.tier)
@@ -499,6 +526,8 @@ export function resolvePitch(f: PitchFlight, c: AtBatContext): PitchResult {
   const tags: string[] = []
   const adapt = batterAdaptation(c.memory, f.pitch.id, L).level
   const meatball = f.meatball
+  const plan = batterPlan(c)
+  const readPlan = (f.pitch.family === 'FASTBALL') === plan.expectFastball
 
   // Hit by pitch: way inside at body height.
   if (inX > 1.85 && L.y > -1.5 && L.y < 1.6) return { outcome: 'HIT_BY_PITCH', swing: false, perceived: L, tunnel: 0, adaptation: adapt, tags: ['몸에 맞는 공'], barrel: L, sprayAngle: 0 }
@@ -510,10 +539,11 @@ export function resolvePitch(f: PitchFlight, c: AtBatContext): PitchResult {
   const remaining = 1 - movementProgress(f, td)
   const hides = same && f.pitch.family === 'BREAKING' ? .12 : 0
   const repeatedZone = (c.history ?? []).slice(-4).filter(p => p.pitch === f.pitch.id && Math.hypot(p.x - L.x, p.y - L.y) < .55).length
-  const recognize = clamp(.42 + repeatedZone * .09 + adapt * .3 + eye * .4 + (f.pitch.family === 'FASTBALL' ? .25 : 0) + (f.pitch.id === 'CURVE' ? .3 : 0) - tunnel * .5 - hides - league.latencyMs / 400, .05, .95)
+  const recognize = clamp(.42 + repeatedZone * .09 + adapt * .3 + eye * .4 + (f.pitch.family === 'FASTBALL' ? .25 : 0) + (f.pitch.id === 'CURVE' ? .3 : 0) - tunnel * .5 - hides - league.latencyMs / 400 + (readPlan ? .08 : -.1) * plan.conviction, .05, .95)
   // Eye-level change: high heat, then something down low.
   const eyeLevel = c.previous && c.previous.pitch.family === 'FASTBALL' && c.previous.landing.y < -.55 && L.y > .45 && f.pitch.family !== 'FASTBALL' ? 1 : 0
-  const recognized = meatball || Math.random() < recognize - eyeLevel * .2
+  const lowToHigh = c.previous && c.previous.pitch.family !== 'FASTBALL' && c.previous.landing.y > .45 && f.pitch.id === 'FOUR_SEAM' && L.y < -.55 ? 1 : 0
+  const recognized = meatball || Math.random() < recognize - eyeLevel * .2 - lowToHigh * .12
   const typical = Math.min(1, .62 / breakScale(f.breakLevel))
   const armSide = c.pitcherHand === 'R' ? 1 : -1
   const rise = riseIllusion(f)
@@ -573,7 +603,7 @@ export function resolvePitch(f: PitchFlight, c: AtBatContext): PitchResult {
   const knownPitches = [...(c.memory ?? []).flatMap(pa => pa.pitches), ...(c.history ?? [])]
   // Existing simulation callers can supply paired observations without a pitch log.
   const observations = knownPitches.length ? knownPitches : c.seenSpeeds.map((speed, i) => ({ pitch: c.seenTypes[i] ?? f.pitch.id, speed, x: 0, y: 0, px: 0, py: 0, call: '', tag: '' }))
-  const speedRead = timingRead(f.speed, c.fastest, observations, f.pitch.id, recognized, eye, tunnel, c.previous?.speed)
+  const speedRead = timingRead(f.speed, c.fastest, observations, f.pitch.id, recognized, eye, tunnel, c.previous?.speed, plan.expectedSpeed, plan.conviction)
   const early = speedRead.early
   if (speedRead.familiar && recognized && speedRead.gap > 22) tags.push('구속대 적응')
   const reaction = 143 + b.contact * 12 + league.contact * 30 + league.reaction
@@ -581,7 +611,7 @@ export function resolvePitch(f: PitchFlight, c: AtBatContext): PitchResult {
   const lateness = Math.max(0, (f.perceivedSpeed ?? f.speed) - reaction) / 28
   const timing = Math.abs(early) + lateness * (1 - Math.max(0, early) * .5)
   const repeat = c.seenTypes.slice(-2).filter(t => t === f.pitch.id).length
-  const timingErr = meatball ? 0 : Math.max(0, timing - repeat * .12 - repeatedZone * .06 - adapt * .25)
+  const timingErr = meatball ? 0 : Math.max(0, timing - repeat * .12 - repeatedZone * .06 - adapt * .25 + (!readPlan && !recognized ? plan.conviction * .12 : 0))
 
   // 4) Bat-to-ball.
   const missX = L.x - barrel.x, missY = L.y - barrel.y
@@ -604,11 +634,12 @@ export function resolvePitch(f: PitchFlight, c: AtBatContext): PitchResult {
   const signature = f.trait === 'signature' ? (f.pitch.id === 'FOUR_SEAM' && highHeat ? .06 : (f.pitch.id === 'CHANGEUP' || f.pitch.id === 'SPLITTER') && tunnel > .45 ? .07 : 0) : 0
   const q = repeatedZone * .045 + (sittingFastball ? .1 : 0) - (backdoor ? .08 : 0) + b.contact * .55 + .36 + league.contact + late + protect + platoon + weak
     + adapt * .24 + conf * .07 + (meatball ? .32 : 0)
-    - signature - spatial * 1.0 - timingErr * .6 - outside * .85 - tunnel * .2 - eyeLevel * .06 - (highHeat ? .1 + rise * .08 : 0) - plane + gauss() * .16
+    + (readPlan ? .07 : -.1) * plan.conviction
+    - signature - spatial * 1.0 - timingErr * .6 - outside * .85 - tunnel * .2 - eyeLevel * .06 - lowToHigh * .06 - (highHeat ? .1 + rise * .08 : 0) - plane + gauss() * .16
 
   if (f.breakLevel >= 50 && spatial > .25) tags.push('LATE BREAK')
   if (tunnel > .45) tags.push(tr.pair ? '하이-로우 터널' : '터널')
-  if (eyeLevel && spatial > .25) tags.push('눈높이 흔들기')
+  if ((eyeLevel || lowToHigh) && (spatial > .25 || timingErr > .25)) tags.push('눈높이 흔들기')
   if (highHeat && missY < -.25) tags.push(rise > .4 ? '떠오르는 직구' : '하이 패스트볼')
   if (plane && spatial > .25) tags.push('수직 낙차')
   if (!looksStrike || outside > .1) { if (!inZone(L)) tags.push('유인구') }
@@ -616,6 +647,8 @@ export function resolvePitch(f: PitchFlight, c: AtBatContext): PitchResult {
   else if (lateness > .35) tags.push('늦음')
   if (breakAway > .35 && same && spatial > .3) tags.push('도망가는 공')
   if (adapt > .45) tags.push('읽혔다')
+  if (plan.conviction > .42 && !readPlan && timingErr > .2) tags.push('허 찌른 배합')
+  if (plan.conviction > .42 && readPlan && timingErr < .2) tags.push('노림수 적중')
 
   if (q < .12) return { outcome: 'SWINGING_STRIKE', swing, perceived, tunnel, adaptation: adapt, tags, barrel, sprayAngle: 0 }
   const spray = (side === 'R' ? -1 : 1) * clamp(early * .9 - lateness * .8 + gauss() * .35, -1, 1) // + pull = toward hitter's pull side
@@ -643,14 +676,13 @@ export function resolvePitch(f: PitchFlight, c: AtBatContext): PitchResult {
 }
 
 /** Short broadcast-style call for the batter's current approach. */
-export function batterMindset(c: { balls: number; strikes: number; seenTypes: PitchType[] }) {
-  if (c.strikes === 2) return '커트 모드'
-  if (c.balls === 3 && c.strikes === 0) return '하나 기다림'
-  if (c.balls >= 2 && c.balls > c.strikes) return '직구 노림'
-  const recent = c.seenTypes.slice(-2)
-  if (recent.length === 2 && recent.every(t => pitchById(t).family !== 'FASTBALL')) return '변화구 대비'
-  if (c.balls === 0 && c.strikes === 0) return '초구 신중'
-  return '직구 타이밍'
+export function batterMindset(c: Parameters<typeof batterPlan>[0]) {
+  const plan = batterPlan(c)
+  if (c.balls === 0 && c.strikes === 0 && !c.history?.length) return '초구 탐색'
+  if (c.balls === 3 && c.strikes === 0) return '좋은 공 대기'
+  if (plan.fastballChance > .62) return c.strikes === 2 ? '직구 경계' : '직구 노림'
+  if (plan.fastballChance < .44) return '변화구 대비'
+  return c.strikes === 2 ? '커트 · 중간 타이밍' : '중간 타이밍'
 }
 
 /** Moves runners. Returns runs scored. */
