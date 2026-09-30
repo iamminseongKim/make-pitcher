@@ -77,7 +77,20 @@ export function sfx(kind: Sfx, on: boolean, speed = 140) {
   } catch { /* Audio is optional. */ }
 }
 
-/* ───────── Background music: 「스트라이크 존으로」 (3 min, streamed — not decoded into memory) ───────── */
+/* ───────── Background music: 3-track shuffle playlist (streamed — not decoded into memory) ───────── */
+const BGM_TRACKS = ['/audio/bgm.mp3', '/audio/bgm2.mp3', '/audio/bgm3.mp3']
+let bgmBag: number[] = []
+let bgmLast = -1
+/** Shuffle-bag: every track once per round, never the same track twice in a row. */
+function nextBgm() {
+  if (!bgmBag.length) {
+    bgmBag = BGM_TRACKS.map((_, i) => i)
+    for (let i = bgmBag.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [bgmBag[i], bgmBag[j]] = [bgmBag[j], bgmBag[i]] }
+    if (bgmBag[0] === bgmLast && bgmBag.length > 1) [bgmBag[0], bgmBag[1]] = [bgmBag[1], bgmBag[0]]
+  }
+  bgmLast = bgmBag.shift()!
+  return BGM_TRACKS[bgmLast]
+}
 let bgmWanted = false
 let bgmLevel = .5
 let bgmEl: HTMLAudioElement | null = null
@@ -93,17 +106,17 @@ function ramp(to: number, seconds = .5) {
 function ensureBgm() {
   if (bgmEl) return
   const c = ctx()
-  bgmEl = new Audio('/audio/bgm.mp3')
+  bgmEl = new Audio(nextBgm())
   bgmEl.preload = 'auto'
   // Route through Web Audio so volume works on iOS too (HTMLMediaElement.volume is read-only there).
   bgmGain = c.createGain(); bgmGain.gain.value = 0
   c.createMediaElementSource(bgmEl).connect(bgmGain); bgmGain.connect(c.destination)
-  // Seamless-ish loop: fade out over the last seconds, restart, fade back in.
+  // Fade out over the last seconds, switch to the next track, fade back in.
   bgmEl.addEventListener('timeupdate', () => {
     if (!bgmEl || fading || !bgmEl.duration) return
     if (bgmEl.duration - bgmEl.currentTime < BGM_FADE) { fading = true; ramp(0, BGM_FADE) }
   })
-  bgmEl.addEventListener('ended', () => { if (!bgmEl) return; fading = false; bgmEl.currentTime = 0; void bgmEl.play().catch(() => {}); ramp(bgmTarget(), 1.2) })
+  bgmEl.addEventListener('ended', () => { if (!bgmEl) return; fading = false; bgmEl.src = nextBgm(); void bgmEl.play().catch(() => {}); ramp(bgmTarget(), 1.2) })
 }
 /** Browsers block audio until a tap: retry on the first gesture. */
 let unlockArmed = false
