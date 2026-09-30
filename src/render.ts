@@ -8,14 +8,20 @@ export const STAGE = { width: 390, height: 432, zoneX: 195, zoneY: 232, zoneW: 1
 export type CameraView = 'umpire' | 'broadcast'
 const VIEWS: Record<CameraView, { cx: number; cy: number; w: number; h: number; mirror: number }> = {
   umpire: { cx: STAGE.zoneX, cy: STAGE.zoneY, w: STAGE.zoneW, h: STAGE.zoneH, mirror: 1 },
-  broadcast: { cx: 195, cy: 200, w: 66, h: 74, mirror: -1 },
+  broadcast: { cx: 195, cy: 200, w: 94, h: 104, mirror: -1 },
 }
 let view: CameraView = 'umpire'
-const ZX = (x: number) => VIEWS[view].cx + VIEWS[view].mirror * x * VIEWS[view].w / 2
-const ZY = (y: number) => VIEWS[view].cy + y * VIEWS[view].h / 2
+let camera = VIEWS.umpire
+/** Favor the open side of the plate for each batter, while keeping the mound fixed in the foreground. */
+function cameraFor(cam: CameraView, side: Hand) {
+  const base = VIEWS[cam]
+  return cam === 'broadcast' ? { ...base, cx: base.cx + (side === 'R' ? -9 : 9) } : base
+}
+const ZX = (x: number) => camera.cx + camera.mirror * x * camera.w / 2
+const ZY = (y: number) => camera.cy + y * camera.h / 2
 /** Canvas point → zone units for a camera (inverse of ZX/ZY; used for aiming taps). */
-export function canvasToZone(cam: CameraView, x: number, y: number) {
-  const v = VIEWS[cam]
+export function canvasToZone(cam: CameraView, x: number, y: number, side: Hand) {
+  const v = cameraFor(cam, side)
   return { x: (x - v.cx) / (v.w / 2) * v.mirror, y: (y - v.cy) / (v.h / 2) }
 }
 
@@ -251,6 +257,8 @@ function drawBroadcastScenery(ctx: CanvasRenderingContext2D, now: number) {
 /** Umpire and catcher behind the plate; the catcher sets his mitt at the called target. */
 function drawCatcher(ctx: CanvasRenderingContext2D, target: { x: number; y: number }) {
   ctx.save()
+  const shift = camera.cx - 195
+  ctx.translate(shift, 0)
   ctx.lineCap = 'round'
   // umpire (behind the catcher)
   ctx.fillStyle = '#1b2436'; ctx.beginPath(); ctx.ellipse(195, 200, 21, 27, 0, 0, Math.PI * 2); ctx.fill()
@@ -265,7 +273,7 @@ function drawCatcher(ctx: CanvasRenderingContext2D, target: { x: number; y: numb
   ctx.strokeStyle = '#9aa6bb'; ctx.lineWidth = 1
   for (const y of [196, 200, 204]) { ctx.beginPath(); ctx.moveTo(189, y); ctx.lineTo(201, y); ctx.stroke() }
   // mitt arm (his glove hand is on screen-right: he faces the camera)
-  const mitt = { x: clamp(ZX(target.x), 155, 235), y: clamp(ZY(target.y), 165, 250) }
+  const mitt = { x: clamp(ZX(target.x) - shift, 142, 248), y: clamp(ZY(target.y), 148, 252) }
   ctx.strokeStyle = '#2e3d5a'; ctx.lineWidth = 6
   ctx.beginPath(); ctx.moveTo(207, 214); ctx.lineTo(mitt.x, mitt.y); ctx.stroke()
   ctx.fillStyle = '#7a4f2a'; ctx.beginPath(); ctx.arc(mitt.x, mitt.y, 8, 0, Math.PI * 2); ctx.fill()
@@ -360,8 +368,8 @@ function drawPitcher(ctx: CanvasRenderingContext2D, profile: PitcherProfile, fli
 
 function drawBatter(ctx: CanvasRenderingContext2D, side: Hand, anim: BatterAnim, color: string, now: number) {
   // Umpire view: righties stand screen-left. Broadcast: mirrored, farther away, drawn at the plate's depth.
-  const g = view === 'broadcast' ? { x: side === 'R' ? 262 : 128, y: 262, k: .8 } : { x: side === 'R' ? 100 : 290, y: 372, k: 1 }
-  const dir = g.x < 195 ? 1 : -1 // direction toward the plate
+  const g = view === 'broadcast' ? { x: camera.cx + (side === 'R' ? 67 : -67), y: 262, k: .8 } : { x: side === 'R' ? 100 : 290, y: 372, k: 1 }
+  const dir = g.x < camera.cx ? 1 : -1 // direction toward the plate
   const ox = 0, oy = 0
   const since = now - anim.at
   const idleBob = Math.sin(now / 420) * 1.2
@@ -435,7 +443,7 @@ const angleDiff = (a: number, b: number) => { let d = b - a; while (d > Math.PI)
 /* ───────────── Zone & overlays ───────────── */
 
 function drawZone(ctx: CanvasRenderingContext2D, scene: RenderScene) {
-  const left = Math.min(ZX(-1), ZX(1)), top = ZY(-1), w = VIEWS[view].w, h = VIEWS[view].h
+  const left = Math.min(ZX(-1), ZX(1)), top = ZY(-1), w = camera.w, h = camera.h
   if (scene.heat) {
     for (let r = 0; r < 3; r++) for (let c = 0; c < 3; c++) {
       const v = scene.heat[r][c]
@@ -618,12 +626,13 @@ function drawResult(ctx: CanvasRenderingContext2D, result: RenderScene['result']
 export function renderScene(ctx: CanvasRenderingContext2D, scene: RenderScene) {
   const { flight, flightProgress: t, now } = scene
   view = scene.view ?? 'umpire'
+  camera = cameraFor(view, scene.batterSide)
   ctx.clearRect(0, 0, STAGE.width, STAGE.height)
   ctx.save()
   const impactAge = (now - scene.result.at) / 1000
   const punch = !window.matchMedia('(prefers-reduced-motion: reduce)').matches && scene.result.tone === 'k' ? Math.max(0, 1 - impactAge / 1.2) : 0
   const zoom = 1 + punch * .10
-  const V = VIEWS[view]
+  const V = camera
   ctx.translate(V.cx, V.cy); ctx.scale(zoom, zoom); ctx.translate(-V.cx, -V.cy)
   if (view === 'broadcast') {
     drawBroadcastScenery(ctx, now)

@@ -339,7 +339,7 @@ function App() {
     const rect = event.currentTarget.getBoundingClientRect()
     const x = (event.clientX - rect.left) / rect.width * STAGE.width
     const y = (event.clientY - rect.top) / rect.height * STAGE.height
-    const z = canvasToZone(settings.view === 'broadcast' ? 'broadcast' : 'umpire', x, y)
+    const z = canvasToZone(settings.view === 'broadcast' ? 'broadcast' : 'umpire', x, y, side)
     setTarget({ x: clamp(z.x, -1.7, 1.7), y: clamp(z.y, -1.7, 1.7) })
     setAimedOnce(true)
   }
