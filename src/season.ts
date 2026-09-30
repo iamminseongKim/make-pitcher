@@ -36,7 +36,17 @@ export function loadUnlockedTier(): number {
 export function saveUnlockedTier(tier: number) {
   try { localStorage.setItem(UNLOCK_KEY, JSON.stringify({ maxTier: Math.max(0, Math.min(4, Math.floor(tier))) })) } catch { /* storage optional */ }
 }
-export const FIP_CONSTANT = 3.1
+/**
+ * FIP constant per league (cFIP = lgERA − lgFIPraw), calibrated to this game's run environment
+ * with `pnpm sim:fip`. MLB's real-world 3.10 assumes ~8.5 K/9; the low leagues here run 15+ K/9,
+ * so 3.10 pushed FIP far below ERA and below zero (and made the promotion FIP check a free pass).
+ * Read at each league's promotion ERA, averaged over 6 runs of the calibration sim.
+ */
+export const FIP_CONSTANTS = [4.2, 4.45, 4.65, 3.95, 4] as const
+/** A single season uses its league's constant; a career line carries the IP-weighted blend. */
+export const fipConstant = (s: Pick<Season, 'tier' | 'fipConstant'>) => s.fipConstant ?? FIP_CONSTANTS[Math.max(0, Math.min(FIP_CONSTANTS.length - 1, Math.floor(s.tier ?? 0)))]
+/** FIP estimates ERA, and ERA cannot go below 0 — the linear formula can in tiny or K-heavy samples. */
+const fipValue = (s: Season) => Math.max(0, (13 * s.homeRuns + 3 * (s.walks + s.hbp) - 2 * s.strikeouts) / (s.outs / 3) + fipConstant(s))
 
 export interface Season {
   number: number; tier: number; games: number; wins: number; losses: number; saves: number
@@ -54,6 +64,8 @@ export interface Season {
   awards?: string[]
   /** Full-season length this record belongs to (a call-up row keeps its parent's). Old saves: 30. */
   length?: number
+  /** Only on aggregated lines (career): IP-weighted FIP constant of the seasons summed. */
+  fipConstant?: number
 }
 /** 1 for a 30-start year, 2/3 for a 20-start year. */
 export const seasonScale = (s: Pick<Season, 'length'>) => (s.length ?? BASE_SEASON_GAMES) / BASE_SEASON_GAMES
@@ -68,7 +80,11 @@ export const normalizeSeason = (s: Partial<Season> | undefined, fallbackNumber =
 }
 
 export const gameWon = (g: GameState) => pitcherDecision(g) === 'W'
-export const gameSaved = (g: GameState) => gameWon(g) && !g.pulled && Boolean(g.saveOpp)
+/**
+ * Official scoring: the winning pitcher cannot be credited with a save, and our pitcher is a starter,
+ * so SV stays 0 (older saves that counted complete-game wins as saves keep their history).
+ */
+export const gameSaved = (_g: GameState) => false
 /** Runs charged to our pitcher (the bullpen's runs are not his). */
 export const pitcherRuns = (g: GameState) => g.runsAgainst - (g.bullpenRuns ?? 0)
 /** Feats only count for a complete game the pitcher finished himself. */
@@ -95,6 +111,7 @@ export function recordGame(s: Season, g: GameState): Season {
 export function aggregate(seasons: Season[]): Season {
   const sum = newSeason(seasons.at(-1)?.tier ?? 0, seasons.length)
   for (const s of seasons) for (const k of ['games', 'wins', 'losses', 'saves', 'outs', 'runs', 'hits', 'walks', 'hbp', 'homeRuns', 'strikeouts', 'atBats', 'pitches'] as const) sum[k] += s[k] ?? 0
+  if (sum.outs) sum.fipConstant = seasons.reduce((n, s) => n + (s.outs ?? 0) * fipConstant(s), 0) / sum.outs
   return sum
 }
 
@@ -107,7 +124,7 @@ export function seasonRates(s: Season) {
   return {
     ERA: per(s.runs, s.outs, 27, 2),
     WHIP: per(s.hits + s.walks, s.outs, 3, 2),
-    FIP: ip ? ((13 * s.homeRuns + 3 * (s.walks + s.hbp) - 2 * s.strikeouts) / ip + FIP_CONSTANT).toFixed(2) : '—',
+    FIP: ip ? fipValue(s).toFixed(2) : '—',
     'K/9': per(s.strikeouts, s.outs, 27, 1),
     'BB/9': per(s.walks, s.outs, 27, 1),
     'K/BB': s.walks ? (s.strikeouts / s.walks).toFixed(2) : s.strikeouts ? '∞' : '—',
@@ -137,7 +154,7 @@ export function serviceTime(history: Season[], current: Season) {
 export const PROMOTION_ERA = [4.5, 4.2, 3.9, 3.6, 3.6] as const
 export const PROMOTION = { minOuts: 300, callUpGames: 10, callUpOuts: 150, callUpMargin: { era: 1.5, fip: 1 }, demoteMargin: 2, demoteMinOuts: 90 } as const
 export const eraOf = (s: Season) => s.outs ? s.runs * 27 / s.outs : Infinity
-export const fipOf = (s: Season) => s.outs ? (13 * s.homeRuns + 3 * (s.walks + s.hbp) - 2 * s.strikeouts) / (s.outs / 3) + FIP_CONSTANT : Infinity
+export const fipOf = (s: Season) => s.outs ? fipValue(s) : Infinity
 export interface Criterion { label: string; value: string; goal: string; met: boolean }
 export interface PromotionStatus { canPromote: boolean; callUp: boolean; demote: boolean; top: boolean; threshold: number; season: Criterion[]; callUpCriteria: Criterion[] }
 export function promotionStatus(s: Season): PromotionStatus {

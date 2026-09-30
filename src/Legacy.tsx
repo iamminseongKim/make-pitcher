@@ -13,8 +13,8 @@ function Plaque({ p }: { p: RetiredPlayer }) {
     <h2>{p.name}</h2>
     <p>{p.height}cm · {p.hand === 'R' ? '우투' : '좌투'} · {ARM_SLOTS[p.armSlot].label} · {p.startAge}–{p.retiredAge}세 · {years}년 · 최고 {tierOf(p.peakTier).label}</p>
     <div className="table-scroll"><table className="stat-table plaque-table">
-      <thead><tr><th>W-L</th><th>SV</th><th>IP</th><th>ERA</th><th>FIP</th><th>SO</th></tr></thead>
-      <tbody><tr><td>{c.wins}-{c.losses}</td><td>{c.saves}</td><td>{formatIP(c.outs)}</td><td>{r.ERA}</td><td>{r.FIP}</td><td>{c.strikeouts}</td></tr></tbody>
+      <thead><tr><th>W-L</th><th>IP</th><th>ERA</th><th>FIP</th><th>SO</th></tr></thead>
+      <tbody><tr><td>{c.wins}-{c.losses}</td><td>{formatIP(c.outs)}</td><td>{r.ERA}</td><td>{r.FIP}</td><td>{c.strikeouts}</td></tr></tbody>
     </table></div>
     <p className="plaque-reason">{RETIRE_LABEL[p.reason]}{p.honors.length ? ` · ${p.honors.join(' · ')}` : ''}</p>
     <TrophyCase seasons={p.seasons} />

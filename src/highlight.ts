@@ -1,5 +1,5 @@
 import {
-  PITCHES, SWEET_CENTER, applyOutcome, batterSide, clamp, createFlight, lerp, resolvePitch, staminaCost, statSpeed,
+  PITCHES, SWEET_CENTER, applyOutcome, batterAdaptation, batterSide, clamp, createFlight, lerp, resolvePitch, staminaCost, statSpeed,
   type GameState, type PitchFlight, type PitchType, type PitcherProfile,
 } from './game'
 
@@ -26,18 +26,41 @@ export function isKeyMoment(g: GameState): { key: boolean; reason: string } {
 const gauss = () => { const u = 1 - Math.random(), v = Math.random(); return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v) }
 const rnd = (a: number, b: number) => a + Math.random() * (b - a)
 
-/** A sensible catcher's call: fastball early and ahead in the zone, a chase pitch to finish. */
+/**
+ * A sensible catcher's call: fastball early and ahead in the zone, a chase pitch to finish.
+ * Several candidate calls are drawn and the one this hitter has seen least (batter memory) wins,
+ * so auto-thrown plate appearances do not feed the same pattern to the lineup all game.
+ */
 function call(g: GameState, profile: PitcherProfile, arsenal: PitchType[]): { type: PitchType; x: number; y: number } {
   const b = g.lineup[g.batterIndex]
   const side = batterSide(b, profile.hand)
   const away = side === 'R' ? 1 : -1
   const same = side === profile.hand
-  const fb = arsenal.find(t => PITCHES.find(p => p.id === t)!.family === 'FASTBALL') ?? arsenal[0]
-  const want = same ? 'BREAKING' : 'OFFSPEED'
-  const soft = arsenal.find(t => PITCHES.find(p => p.id === t)!.family === want) ?? arsenal.find(t => t !== fb) ?? fb
-  if (g.strikes === 2 && g.balls < 3) return Math.random() < .45 ? { type: fb, x: rnd(-.4, .4), y: rnd(-1.3, -1.05) } : { type: soft, x: away * rnd(.8, 1.2), y: rnd(.9, 1.3) }
-  if (g.balls >= 2) return { type: fb, x: away * rnd(.3, .75), y: rnd(-.3, .5) }
-  return Math.random() < .55 ? { type: fb, x: away * rnd(.45, .9), y: rnd(-.85, -.3) } : { type: soft, x: away * rnd(.45, .9), y: rnd(.45, .9) }
+  const fam = (t: PitchType) => PITCHES.find(p => p.id === t)!.family
+  const fbs = arsenal.filter(t => fam(t) === 'FASTBALL')
+  const softs = arsenal.filter(t => fam(t) !== 'FASTBALL')
+  const pick = <T,>(l: T[]) => l[Math.floor(Math.random() * l.length)]
+  const fb = () => pick(fbs.length ? fbs : arsenal)
+  // Platoon: glove-side breakers vs same-hand hitters, fading offspeed vs opposite-hand hitters.
+  const soft = () => { const good = softs.filter(t => fam(t) === (same ? 'BREAKING' : 'OFFSPEED')); return pick(good.length && Math.random() < .75 ? good : softs.length ? softs : arsenal) }
+  const side1 = () => (Math.random() < .7 ? away : -away)
+  const options = (): { type: PitchType; x: number; y: number } => {
+    if (g.strikes === 2 && g.balls < 3) {
+      const r = Math.random()
+      return r < .35 ? { type: fb(), x: rnd(-.5, .5), y: rnd(-1.3, -1.05) } : r < .8 ? { type: soft(), x: away * rnd(.8, 1.2), y: rnd(.9, 1.3) } : { type: soft(), x: -away * rnd(.7, 1.1), y: rnd(1, 1.3) }
+    }
+    if (g.balls >= 2) return Math.random() < .7 ? { type: fb(), x: side1() * rnd(.3, .75), y: rnd(-.5, .5) } : { type: soft(), x: side1() * rnd(.2, .6), y: rnd(.3, .75) }
+    const r = Math.random()
+    return r < .5 ? { type: fb(), x: side1() * rnd(.45, .9), y: rnd(-.85, -.3) } : r < .85 ? { type: soft(), x: side1() * rnd(.45, .9), y: rnd(.45, .9) } : { type: fb(), x: side1() * rnd(.5, .9), y: rnd(.3, .8) }
+  }
+  const prior = (g.memory ?? {})[b.id]
+  let best = options(), bestRisk = Infinity
+  for (let i = 0; i < 5; i++) {
+    const c = i ? options() : best
+    const risk = batterAdaptation(prior, c.type, c).level + Math.random() * .05
+    if (risk < bestRisk) { best = c; bestRisk = risk }
+  }
+  return best
 }
 
 export interface AutoPA {

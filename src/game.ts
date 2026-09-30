@@ -225,6 +225,10 @@ export interface GameState {
   bullpenRuns: number
   /** Score margin (ours − theirs) when the pitcher left. */
   exitLead: number
+  /** Decision fixed when the starter left and the bullpen played it out (official W/L rules). */
+  starterDecision?: Decision
+  /** Runners he left on base who scored after he left (charged to him). */
+  inheritedRuns?: number
   over: boolean
 }
 
@@ -326,29 +330,49 @@ function bullpenHalf(tier: number, fraction = 1) {
   return r < .7 - t ? 0 : r < .87 - t ? 1 : r < .95 ? 2 : 3
 }
 export type Decision = 'W' | 'L' | 'ND' | 'T'
-/** The pitcher hands the ball over: the bullpen and our lineup play out the rest of the game. */
+/** Chance an inherited runner scores (1B, 2B, 3B), scaled by outs — MLB inherited runners score ≈30%. */
+const INHERITED_SCORE = [.13, .27, .45] as const
+/**
+ * The pitcher hands the ball over: the bullpen and our lineup play out the rest of the game.
+ * Runners he left on base who score are charged to HIM (not the bullpen), and his W/L follows
+ * the official rules: a win needs 5 IP and a lead the team never gives up; a loss needs him to
+ * leave trailing (his runs included) with the team never tying it again.
+ */
 export function bullpenFinish(g: GameState): GameState {
-  const next: GameState = { ...g, lineScore: [...g.lineScore], ourScore: [...g.ourScore], pulled: true, exitLead: g.runsFor - g.runsAgainst, abLog: [], balls: 0, strikes: 0 }
+  const next: GameState = { ...g, lineScore: [...g.lineScore], ourScore: [...g.ourScore], pulled: true, abLog: [], balls: 0, strikes: 0 }
   let inning = g.inning, bullpen = 0
-  const top = (fraction: number) => { const r = bullpenHalf(g.tier, fraction); next.lineScore[next.lineScore.length - 1] += r; next.runsAgainst += r; bullpen += r }
+  const addRuns = (r: number, charged: boolean) => { next.lineScore[next.lineScore.length - 1] += r; next.runsAgainst += r; if (!charged) bullpen += r }
+  // Inherited runners score first (they are already on base).
+  if (g.outs < 3) {
+    const outsFactor = g.outs === 0 ? 1.25 : g.outs === 1 ? 1 : .7
+    next.inheritedRuns = g.bases.reduce((n, on, i) => n + (on && Math.random() < INHERITED_SCORE[i] * outsFactor ? 1 : 0), 0)
+    addRuns(next.inheritedRuns, true)
+  }
+  const exitLead = next.runsFor - next.runsAgainst
+  let leadHeld = exitLead > 0, caughtUp = exitLead >= 0
+  const check = () => { if (next.runsAgainst >= next.runsFor) leadHeld = false; if (next.runsFor >= next.runsAgainst) caughtUp = true }
+  const top = (fraction: number) => { addRuns(bullpenHalf(g.tier, fraction), false); check() }
   // Finish the current top half from the current out count.
   if (g.outs < 3) top((3 - g.outs) / 3)
   for (;;) {
     if (inning >= 9 && next.runsFor > next.runsAgainst) break // no need for the bottom half
     const ours = simulateOurHalf()
-    next.ourScore.push(ours); next.runsFor += ours
+    next.ourScore.push(ours); next.runsFor += ours; check()
     if (inning >= 9 && next.runsFor !== next.runsAgainst) break
     if (inning >= 12) break
     inning++
     next.lineScore.push(0)
     top(1)
   }
-  return { ...next, inning, bullpenRuns: (g.bullpenRuns ?? 0) + bullpen, outs: 0, bases: [false, false, false], over: true, saveOpp: false }
+  const won = next.runsFor > next.runsAgainst, lost = next.runsFor < next.runsAgainst
+  const starterDecision: Decision = won && leadHeld && g.totalOuts >= 15 ? 'W' : lost && !caughtUp ? 'L' : 'ND'
+  return { ...next, inning, exitLead, starterDecision, bullpenRuns: (g.bullpenRuns ?? 0) + bullpen, outs: 0, bases: [false, false, false], over: true, saveOpp: false }
 }
-/** W/L/ND for our pitcher. A pulled starter needs 5 innings and to leave ahead (or behind) for a decision. */
+/** W/L/ND for our pitcher. A pulled starter's decision is fixed by bullpenFinish (older saves fall back to the lead at exit). */
 export function pitcherDecision(g: GameState): Decision {
   const won = g.runsFor > g.runsAgainst, lost = g.runsFor < g.runsAgainst
   if (!g.pulled) return won ? 'W' : lost ? 'L' : 'T'
+  if (g.starterDecision) return g.starterDecision
   if (won && g.exitLead > 0 && g.totalOuts >= 15) return 'W'
   if (lost && g.exitLead < 0) return 'L'
   return 'ND'

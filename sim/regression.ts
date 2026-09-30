@@ -127,7 +127,7 @@ assert.equal(g.pitchLog.at(-1)!.meatball, true)
   assert(fin.over)
   Math.random = original
   const s = recordGame(newSeason(2), { ...fin, homeRuns: 1, hbp: 1, strikeouts: 9, walks: 2 })
-  assert.equal(s.saves, 1); assert.equal(s.wins, 1); assert.equal(s.homeRuns, 1)
+  assert.equal(s.saves, 0, 'the winning pitcher cannot also get a save'); assert.equal(s.wins, 1); assert.equal(s.homeRuns, 1)
   s8 = { ...s8, runsFor: 9 }
   assert(!closeInning(s8).game.saveOpp, 'big lead is not a save situation')
 }
@@ -139,7 +139,10 @@ assert.equal(s.games, 1); assert.deepEqual(recordGame(s, g), s)
 assert.equal(seasonRates({ ...s, runs: 3, hits: 6, walks: 3, strikeouts: 9, atBats: 30 }).ERA, '3.00')
 assert.equal(seasonRates({ ...s, hits: 6, walks: 3 }).WHIP, '1.00')
 // FIP = (13·HR + 3·(BB+HBP) − 2·K)/IP + 3.10 → (13 + 9 − 18)/9 + 3.10 = 3.54
-assert.equal(seasonRates({ ...newSeason(), outs: 27, homeRuns: 1, walks: 2, hbp: 1, strikeouts: 9 }).FIP, '3.54')
+assert.equal(seasonRates({ ...newSeason(), outs: 27, homeRuns: 1, walks: 2, hbp: 1, strikeouts: 9 }).FIP, '4.64') // (13+9-18)/9 + 4.20 (AMA)
+assert.equal(seasonRates({ ...newSeason(4), outs: 27, homeRuns: 1, walks: 2, hbp: 1, strikeouts: 9 }).FIP, '4.44') // MLB constant 4.00
+assert.equal(seasonRates({ ...newSeason(), outs: 3, strikeouts: 3 }).FIP, '0.00', 'immaculate inning: FIP is floored at 0, never negative')
+{ const c = aggregate([{ ...newSeason(0), outs: 300 }, { ...newSeason(4), outs: 100 }]); assert(Math.abs(c.fipConstant! - (4.2 * 3 + 4) / 4) < 1e-9, 'career FIP uses the IP-weighted constant') }
 assert.equal(seasonRates({ ...newSeason(), outs: 27, walks: 2, strikeouts: 9 })['K/BB'], '4.50')
 assert.equal(seasonRates({ ...newSeason(), outs: 27, walks: 2, strikeouts: 9 })['BB/9'], '2.0')
 assert.equal(formatIP(14), '4.2'); assert.equal(formatIP(27), '9.0')
@@ -233,10 +236,26 @@ assert(hitsOver(6000, () => f, { balls: 3, strikes: 1, history: Array(4).fill(g.
     assert.equal(done.lineScore.reduce((a, n) => a + n, 0), done.runsAgainst)
     assert.equal(done.ourScore.reduce((a, n) => a + n, 0), done.runsFor)
     const dec = pitcherDecision(done)
-    assert(done.runsFor > done.runsAgainst ? dec === 'W' : dec !== 'W')
+    // Replay the rest of the game half by half: the starter keeps the W only if the lead is never lost.
+    let us = mid.runsFor, them = mid.runsAgainst, held = true
+    for (let inn = 6; inn <= done.inning; inn++) {
+      them += done.lineScore[inn - 1] - (mid.lineScore[inn - 1] ?? 0); if (them >= us) held = false
+      us += (done.ourScore[inn - 1] ?? 0) - (mid.ourScore[inn - 1] ?? 0)
+    }
+    assert.equal(dec === 'W', done.runsFor > done.runsAgainst && held, 'W needs a lead the bullpen never gives up')
+    assert(dec !== 'L', 'left with a lead: never the losing pitcher')
     const rec = recordGame(newSeason(2), done)
     assert.equal(rec.runs, 1); assert.equal(rec.saves, 0); assert.equal(rec.wins, Number(dec === 'W'))
   }
+  // Runners he leaves on base are his runs when they score.
+  let inherited = 0
+  for (let i = 0; i < 200; i++) {
+    const loaded = bullpenFinish({ ...mid, bases: [true, true, true], outs: 0 })
+    assert.equal(loaded.runsAgainst - loaded.bullpenRuns, 1 + (loaded.inheritedRuns ?? 0))
+    assert.equal(recordGame(newSeason(2), loaded).runs, 1 + (loaded.inheritedRuns ?? 0))
+    inherited += loaded.inheritedRuns ?? 0
+  }
+  assert(inherited / 200 > .6 && inherited / 200 < 1.4, `bases-loaded, no-out inherited runners score ≈1 (${inherited / 200})`)
   const early = bullpenFinish({ ...mid, totalOuts: 12 })
   if (early.runsFor > early.runsAgainst) assert.equal(pitcherDecision(early), 'ND', 'under 5 IP is no decision')
   Math.random = original

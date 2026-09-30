@@ -8,6 +8,7 @@
     "build": "tsc -b && vite build",
     "preview": "vite preview --host 0.0.0.0",
     "sim": "esbuild sim/sim.ts --bundle --platform=node --outfile=node_modules/.cache/sim.cjs --log-level=warning && node node_modules/.cache/sim.cjs",
+    "sim:fip": "esbuild sim/fip-calibration.ts --bundle --platform=node --outfile=node_modules/.cache/fip.cjs --log-level=warning && node node_modules/.cache/fip.cjs",
     "sim:platoon": "esbuild sim/platoon.ts --bundle --platform=node --outfile=node_modules/.cache/platoon.cjs --log-level=warning && node node_modules/.cache/platoon.cjs",
     "test": "esbuild sim/regression.ts --bundle --platform=node --outfile=node_modules/.cache/regression.cjs --log-level=warning && node node_modules/.cache/regression.cjs"
   },
