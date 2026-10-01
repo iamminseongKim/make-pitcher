@@ -512,6 +512,22 @@ export function batterPlan(c: Pick<AtBatContext, 'balls' | 'strikes'> & { histor
   return { fastballChance, expectFastball, conviction, expectedSpeed }
 }
 
+/** Course memory is short-lived: two or three similar looks set an expectation on each axis. */
+export function courseRead(history: PitchLog[] | undefined, side: Hand, loc: { x: number; y: number }) {
+  const recent = (history ?? []).slice(-3)
+  const inside = (x: number) => side === 'R' ? -x : x
+  const surprise = (values: number[], actual: number) => {
+    if (values.length < 2) return 0
+    const mean = values.reduce((sum, value) => sum + value, 0) / values.length
+    const spread = Math.max(...values) - Math.min(...values)
+    const pattern = clamp(1 - spread / .9, 0, 1)
+    return clamp((Math.abs(actual - mean) - .35) / 1.25, 0, 1) * pattern * (values.length === 2 ? .75 : 1)
+  }
+  const horizontal = surprise(recent.map(p => inside(p.x)), inside(loc.x))
+  const vertical = surprise(recent.map(p => p.y), loc.y)
+  return { horizontal, vertical, total: clamp(horizontal * .7 + vertical * .3, 0, 1) }
+}
+
 export function resolvePitch(f: PitchFlight, c: AtBatContext): PitchResult {
   const b = c.batter
   const league = tierOf(c.tier)
@@ -528,6 +544,9 @@ export function resolvePitch(f: PitchFlight, c: AtBatContext): PitchResult {
   const meatball = f.meatball
   const plan = batterPlan(c)
   const readPlan = (f.pitch.family === 'FASTBALL') === plan.expectFastball
+  const course = courseRead(c.history, side, L)
+  const insideHigh = clamp(inX, 0, 1) * clamp(-L.y, 0, 1)
+  const awayLow = clamp(-inX, 0, 1) * clamp(L.y, 0, 1)
 
   // Hit by pitch: way inside at body height.
   if (inX > 1.85 && L.y > -1.5 && L.y < 1.6) return { outcome: 'HIT_BY_PITCH', swing: false, perceived: L, tunnel: 0, adaptation: adapt, tags: ['몸에 맞는 공'], barrel: L, sprayAngle: 0 }
@@ -535,11 +554,12 @@ export function resolvePitch(f: PitchFlight, c: AtBatContext): PitchResult {
   // 1) What the hitter sees at the commit point, plus the break he *expects* from the pitch he thinks it is.
   const tr = tunnelRead(f, c.previous)
   const tunnel = meatball ? 0 : tr.score
-  const td = decisionPoint(f, league.latencyMs)
+  // Inside/high contact is made farther out front; outside/low can be tracked a little longer.
+  const td = decisionPoint(f, league.latencyMs + insideHigh * 12 - awayLow * 8 + course.total * 12)
   const remaining = 1 - movementProgress(f, td)
   const hides = same && f.pitch.family === 'BREAKING' ? .12 : 0
   const repeatedZone = (c.history ?? []).slice(-4).filter(p => p.pitch === f.pitch.id && Math.hypot(p.x - L.x, p.y - L.y) < .55).length
-  const recognize = clamp(.42 + repeatedZone * .09 + adapt * .3 + eye * .4 + (f.pitch.family === 'FASTBALL' ? .25 : 0) + (f.pitch.id === 'CURVE' ? .3 : 0) - tunnel * .5 - hides - league.latencyMs / 400 + (readPlan ? .08 : -.1) * plan.conviction, .05, .95)
+  const recognize = clamp(.42 + repeatedZone * .09 + adapt * .3 + eye * .4 + (f.pitch.family === 'FASTBALL' ? .25 : 0) + (f.pitch.id === 'CURVE' ? .3 : 0) - tunnel * .5 - hides - league.latencyMs / 400 - course.total * .12 + (readPlan ? .08 : -.1) * plan.conviction, .05, .95)
   // Eye-level change: high heat, then something down low.
   const eyeLevel = c.previous && c.previous.pitch.family === 'FASTBALL' && c.previous.landing.y < -.55 && L.y > .45 && f.pitch.family !== 'FASTBALL' ? 1 : 0
   const lowToHigh = c.previous && c.previous.pitch.family !== 'FASTBALL' && c.previous.landing.y > .45 && f.pitch.id === 'FOUR_SEAM' && L.y < -.55 ? 1 : 0
@@ -612,9 +632,11 @@ export function resolvePitch(f: PitchFlight, c: AtBatContext): PitchResult {
   const reaction = 143 + b.contact * 12 + league.contact * 30 + league.reaction
   // Extension: the ball gets on him faster than the gun says.
   const lateness = Math.max(0, (f.perceivedSpeed ?? f.speed) - reaction) / 28
-  const timing = Math.abs(early) + lateness * (1 - Math.max(0, early) * .5)
+  // Inside pitches want an earlier contact point; outside pitches want a later one (about 10 ms apart).
+  const contactLead = clamp(inX, -1, 1) * .04
+  const timing = Math.abs(early - contactLead) + lateness * (1 - Math.max(0, early) * .5)
   const repeat = c.seenTypes.slice(-2).filter(t => t === f.pitch.id).length
-  const timingErr = meatball ? 0 : Math.max(0, timing - repeat * .12 - repeatedZone * .06 - adapt * .25 + (!readPlan && !recognized ? plan.conviction * .12 : 0))
+  const timingErr = meatball ? 0 : Math.max(0, timing - repeat * .12 - repeatedZone * .06 - adapt * .25 + course.total * .11 + (!readPlan && !recognized ? plan.conviction * .12 : 0))
 
   // 4) Bat-to-ball.
   const missX = L.x - barrel.x, missY = L.y - barrel.y
@@ -638,11 +660,13 @@ export function resolvePitch(f: PitchFlight, c: AtBatContext): PitchResult {
   const q = repeatedZone * .045 + (sittingFastball ? .1 : 0) - (backdoor ? .08 : 0) + b.contact * .55 + .36 + league.contact + late + protect + platoon + weak
     + adapt * .24 + conf * .07 + (meatball ? .32 : 0)
     + (readPlan ? .07 : -.1) * plan.conviction
-    - signature - spatial * 1.0 - timingErr * .6 - outside * .85 - tunnel * .2 - eyeLevel * .06 - lowToHigh * .06 - (highHeat ? .1 + rise * .08 : 0) - plane + gauss() * .16
+    - signature - spatial * 1.0 - timingErr * .6 - outside * .85 - tunnel * .2 - eyeLevel * .06 - lowToHigh * .06 - (highHeat ? .1 + rise * .08 : 0) - plane
+    - awayLow * .07 - course.total * (.08 + insideHigh * .05) + gauss() * .16
 
   if (f.breakLevel >= 50 && spatial > .25) tags.push('LATE BREAK')
   if (tunnel > .45) tags.push(tr.pair ? '하이-로우 터널' : '터널')
   if ((eyeLevel || lowToHigh) && (spatial > .25 || timingErr > .25)) tags.push('눈높이 흔들기')
+  if (course.total > .45 && (spatial > .2 || timingErr > .2)) tags.push('코스 역공')
   if (highHeat && missY < -.25) tags.push(rise > .4 ? '떠오르는 직구' : '하이 패스트볼')
   if (plane && spatial > .25) tags.push('수직 낙차')
   if (!looksStrike || outside > .1) { if (!inZone(L)) tags.push('유인구') }

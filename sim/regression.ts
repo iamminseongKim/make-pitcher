@@ -3,7 +3,7 @@ import './commute-regression'
 import assert from 'node:assert/strict'
 import {
   PITCHES, createFlight, createPreviewFlight, defaultProfile, pointOnFlight, newGame, applyOutcome, closeInning, loadSave, SAVE_KEY, resolvePitch,
-  releaseQuality, SWEET_CENTER, sweetSpot, batterAdaptation, batterPlan, tunnelRead, extensionOf, releaseHeightOf, zoneCell, scoutingReport, batterSide, HITS,
+  releaseQuality, SWEET_CENTER, sweetSpot, batterAdaptation, batterPlan, courseRead, tunnelRead, extensionOf, releaseHeightOf, zoneCell, scoutingReport, batterSide, HITS,
   physiqueCost, staminaCost, needsHook, canRefuseHook, fatigueAfter, bullpenFinish, pitcherDecision, STAMINA,
   type PitchFlight, type PitchResult, type PlateAppearance, type PitchLog, type AtBatContext,
 } from '../src/game'
@@ -57,7 +57,7 @@ p.hand = 'R'; p.armSlot = 'THREE_QUARTER'
   }
   for (const batter of ['R', 'L'] as const) for (const pitcher of ['R', 'L'] as const) {
     const cx = 210 + (batter === 'R' ? -6 : 6) + (pitcher === 'R' ? 3 : -3)
-    const aim = canvasToZone('broadcast', cx, 200, batter, pitcher)
+    const aim = canvasToZone('broadcast', cx, 168, batter, pitcher)
     assert(Math.abs(aim.x) < 1e-10 && aim.y === 0, 'aim follows both hands')
   }
 }
@@ -215,9 +215,22 @@ assert.equal(loadSave().season.saves, 0); assert.deepEqual(loadSave().history, [
 // Hold the hitter constant: randomized rival archetypes must not change test baselines.
 const aiBatter = { ...g.lineup[3], bats: 'R' as const, contact: .62, power: .6, eye: .6, aggression: .6, zone: 'LOW' as const, weakness: 'NONE' as const }
 const hitsOver = (n: number, flight: () => PitchFlight, ctx: Partial<AtBatContext>, seed = 17) => {
-  seeded(seed); let hits = 0, swings = 0
-  for (let i = 0; i < n; i++) { const r = resolvePitch(flight(), { batter: aiBatter, pitcherHand: 'R', balls: 1, strikes: 1, inning: 1, tier: 2, previous: null, seenTypes: [], seenSpeeds: [], fastest: f.speed, ...ctx }); if (HITS.includes(r.outcome)) hits++; if (r.swing) swings++ }
-  Math.random = original; return { hits, swings }
+  seeded(seed); let hits = 0, swings = 0, whiffs = 0
+  for (let i = 0; i < n; i++) { const r = resolvePitch(flight(), { batter: aiBatter, pitcherHand: 'R', balls: 1, strikes: 1, inning: 1, tier: 2, previous: null, seenTypes: [], seenSpeeds: [], fastest: f.speed, ...ctx }); if (HITS.includes(r.outcome)) hits++; if (r.swing) swings++; if (r.outcome === 'SWINGING_STRIKE') whiffs++ }
+  Math.random = original; return { hits, swings, whiffs }
+}
+// The same outside-to-inside course switch works for both batting sides, and modestly hurts contact.
+{
+  const log = (x: number, y: number): PitchLog => ({ pitch: 'FOUR_SEAM', speed: 148, x, y, px: x, py: y, call: '', tag: '' })
+  const awayR = [log(.8, .7), log(.82, .68)]
+  const awayL = [log(-.8, .7), log(-.82, .68)]
+  assert(courseRead(awayR, 'R', { x: -.8, y: -.7 }).total > .65)
+  assert(courseRead(awayL, 'L', { x: .8, y: -.7 }).total > .65)
+  assert.equal(courseRead(awayR, 'R', { x: .8, y: .7 }).total, 0)
+  const cutter = createPreviewFlight(PITCHES[2], p.arsenal.CUTTER, p, { x: -.78, y: -.78 })
+  const expected = hitsOver(8000, () => cutter, { history: [log(-.8, -.7), log(-.82, -.68)] })
+  const surprised = hitsOver(8000, () => cutter, { history: awayR })
+  assert(surprised.whiffs > expected.whiffs, `outside setup raises high-inside cutter whiffs (${expected.whiffs} → ${surprised.whiffs})`)
 }
 {
   const stat = { unlocked: true, velocityLevel: 35, controlLevel: 35, breakLevel: 35, mastery: 0 }
