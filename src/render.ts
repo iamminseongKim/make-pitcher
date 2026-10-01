@@ -78,9 +78,12 @@ const CAM = 8, RUN = 16.6
 const recede = (t: number) => (1 / CAM - 1 / (CAM + RUN * t)) / (1 / CAM - 1 / (CAM + RUN))
 function broadcastBall(f: PitchFlight, t: number) {
   const p = pointOnFlight(f, t), hand = broadcastHand(f.release), d = recede(clamp(t, 0, 1))
+  const linearX = f.release.x + (f.landing.x - f.release.x) * t
+  const linearY = f.release.y + (f.landing.y - f.release.y) * t
   return {
-    x: ZX(p.x) + (hand.x - ZX(f.release.x)) * (1 - d),
-    y: ZY(p.y) + (hand.y - ZY(f.release.y)) * (1 - d),
+    // Perspective carries the straight path from the hand to the plate; only true break bends it.
+    x: hand.x + (ZX(f.landing.x) - hand.x) * d + camera.mirror * (p.x - linearX) * camera.w / 2 * d,
+    y: hand.y + (ZY(f.landing.y) - hand.y) * d + (p.y - linearY) * camera.h / 2 * d,
     radius: 2.4 + 10 * Math.pow(1 - d, 1.5),
   }
 }

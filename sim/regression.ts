@@ -49,6 +49,22 @@ p.hand = 'R'; p.armSlot = 'THREE_QUARTER'
   assert(curve.p.y - curve.linearY < four.p.y - four.linearY - .25, 'curve has a clear vertical drop')
   assert(Math.abs(path('SLIDER').p.x - path('SLIDER').linearX) > Math.abs(cutter.p.x - cutter.linearX), 'slider sweeps farther than cutter')
   assert(Math.abs(path('SLIDER', right, 99).p.x - path('SLIDER', right, 99).linearX) > Math.abs(path('SLIDER', right, 1).p.x - path('SLIDER', right, 1).linearX), 'movement stat strengthens the same shape')
+  for (const hand of ['R', 'L'] as const) for (const slot of ['OVERHAND', 'THREE_QUARTER', 'SIDEARM', 'SUBMARINE'] as const) for (const level of [1, 20, 50, 99]) {
+    const profile = { ...right, hand, armSlot: slot }
+    const deviation = (id: typeof PITCHES[number]['id']) => {
+      const { p, linearX, linearY } = path(id, profile, level)
+      return { x: p.x - linearX, y: p.y - linearY }
+    }
+    const straight = deviation('FOUR_SEAM'), sink = deviation('SINKER'), cut = deviation('CUTTER')
+    const slide = deviation('SLIDER'), sweep = deviation('SWEEPER'), split = deviation('SPLITTER')
+    const change = deviation('CHANGEUP'), curve = deviation('CURVE')
+    assert(Math.abs(cut.x) < Math.abs(slide.x) && Math.abs(slide.x) < Math.abs(sweep.x), `${hand} ${slot} level ${level}: cutter < slider < sweeper`)
+    assert(Math.sign(cut.x) === -Math.sign(sink.x), 'cutter and sinker break to opposite sides')
+    assert(Math.abs(straight.x) < Math.abs(cut.x), 'four-seam stays closer to a straight path')
+    assert(Math.abs(sweep.y) < Math.abs(slide.y), 'sweeper stays flatter than slider')
+    assert(Math.abs(cut.y) < Math.abs(split.y) && Math.abs(cut.y) < Math.abs(curve.y), 'splitter and curve fall more than cutter')
+    assert(Math.sign(change.x) === Math.sign(sink.x), 'changeup runs toward the arm side')
+  }
   for (const level of [1, 50, 99]) {
     const rh = path('SINKER', { ...right, armSlot: 'THREE_QUARTER' }, level).flight
     const lh = path('SINKER', { ...left, armSlot: 'THREE_QUARTER' }, level).flight

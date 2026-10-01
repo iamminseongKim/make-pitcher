@@ -60,7 +60,7 @@ export interface PitchDefinition {
 export const PITCHES: PitchDefinition[] = [
   { id: 'FOUR_SEAM', name: '포심 패스트볼', short: '포심', family: 'FASTBALL', minSpeed: 130, maxSpeed: 170, moveX: -8, moveY: -45, late: .55, color: '#e63b58', unlockCost: 125, description: '높게 던지면 떠오르듯 배트 위로 지나갑니다' },
   { id: 'SINKER', name: '싱커', short: '싱커', family: 'FASTBALL', minSpeed: 128, maxSpeed: 166, moveX: -40, moveY: 32, late: .72, color: '#ff9d16', unlockCost: 115, description: '같은 손 타자 몸쪽으로 파고들어 땅볼 유도' },
-  { id: 'CUTTER', name: '커터', short: '커터', family: 'FASTBALL', minSpeed: 124, maxSpeed: 163, moveX: 30, moveY: 8, late: .82, color: '#b0a7ff', unlockCost: 135, description: '반대 손 타자 몸쪽으로 꺾여 배트 손잡이에 맞습니다' },
+  { id: 'CUTTER', name: '커터', short: '커터', family: 'FASTBALL', minSpeed: 124, maxSpeed: 163, moveX: 18, moveY: 6, late: .82, color: '#b0a7ff', unlockCost: 135, description: '반대 손 타자 몸쪽으로 짧고 늦게 꺾여 배트 손잡이에 맞습니다' },
   { id: 'SPLITTER', name: '스플리터', short: '스플리터', family: 'OFFSPEED', minSpeed: 118, maxSpeed: 154, moveX: -4, moveY: 52, late: .85, color: '#ffb974', unlockCost: 145, description: '직구처럼 오다 바닥으로 사라지는 결정구' },
   { id: 'CHANGEUP', name: '체인지업', short: '체인지업', family: 'OFFSPEED', minSpeed: 112, maxSpeed: 145, moveX: -31, moveY: 28, late: .62, color: '#31bf64', unlockCost: 125, description: '반대 손 타자 바깥으로 흘러나가며 타이밍 강탈' },
   { id: 'SLIDER', name: '슬라이더', short: '슬라이더', family: 'BREAKING', minSpeed: 115, maxSpeed: 152, moveX: 40, moveY: 22, late: .76, color: '#e3d52a', unlockCost: 145, description: '같은 손 타자 바깥으로 도망가는 헛스윙 유도구' },

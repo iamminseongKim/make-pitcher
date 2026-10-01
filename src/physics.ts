@@ -178,17 +178,26 @@ export function createPreviewFlight(pitch: PitchDefinition, stat: PitchStat, pro
 
 /** Each pitch bends continuously; hard fastball variants hold their line longer, while a curve falls earlier. */
 const PATH_POWER: Record<PitchDefinition['id'], number> = {
-  FOUR_SEAM: 3.1, SINKER: 3.9, CUTTER: 3.55, SPLITTER: 3.65,
-  CHANGEUP: 2.7, SLIDER: 2.85, CURVE: 2.1, SWEEPER: 2.65,
+  FOUR_SEAM: 3.1, SINKER: 3.9, CUTTER: 4.2, SPLITTER: 3.65,
+  CHANGEUP: 2.7, SLIDER: 2.85, CURVE: 2.1, SWEEPER: 2.45,
+}
+/** Arm-slot crossfire is subtle on fastballs and strongest on a sweeper. */
+const SLOT_BOW: Record<PitchDefinition['id'], number> = {
+  FOUR_SEAM: .25, SINKER: .2, CUTTER: .12, SPLITTER: .25,
+  CHANGEUP: .55, SLIDER: .6, CURVE: .25, SWEEPER: 1,
+}
+const SLOT_HOP: Record<PitchDefinition['id'], number> = {
+  FOUR_SEAM: .35, SINKER: .3, CUTTER: .15, SPLITTER: .25,
+  CHANGEUP: .5, SLIDER: .55, CURVE: .8, SWEEPER: .4,
 }
 export const movementProgress = (f: PitchFlight, t: number) => Math.pow(clamp(t, 0, 1), PATH_POWER[f.pitch.id] + (breakScale(f.breakLevel) - .5) * .35)
 export function pointOnFlight(f: PitchFlight, progress: number) {
   const t = clamp(progress, 0, 1), bend = movementProgress(f, t)
   const shape = f.slot ? ARM_SLOTS[f.slot] : ARM_SLOTS.THREE_QUARTER
-  const gravity = shape.hop + (f.pitch.id === 'CURVE' ? .38 * (.55 + breakScale(f.breakLevel) * .45) : 0)
-  // Low slots sweep out toward the arm side and come back across the plate (crossfire).
-  // Keep the sinker's arm-side finish visible; the generic crossfire bow otherwise cancels it near the plate.
-  const bow = shape.bow * (f.pitch.id === 'SINKER' ? .2 : 1) * Math.sign(f.release.x) * t * (1 - t)
+  const slotStrength = .3 + breakScale(f.breakLevel) * .7
+  const gravity = shape.hop * SLOT_HOP[f.pitch.id] * slotStrength + (f.pitch.id === 'CURVE' ? .38 * (.55 + breakScale(f.breakLevel) * .45) : 0)
+  // Low slots add crossfire, but it must not turn a low-level cutter into a sweeper.
+  const bow = shape.bow * SLOT_BOW[f.pitch.id] * slotStrength * Math.sign(f.release.x) * t * (1 - t)
   return { x: lerp(f.release.x, f.landing.x, t) + f.movement.x * (bend - t) + bow,
     y: lerp(f.release.y, f.landing.y, t) + f.movement.y * (bend - t) - gravity * t * (1 - t), z: MOUND_TO_PLATE * (1 - t) }
 }
