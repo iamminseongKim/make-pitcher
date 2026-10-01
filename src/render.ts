@@ -8,7 +8,7 @@ export const STAGE = { width: 390, height: 432, zoneX: 195, zoneY: 232, zoneW: 1
 export type CameraView = 'umpire' | 'broadcast'
 const VIEWS: Record<CameraView, { cx: number; cy: number; w: number; h: number; mirror: number }> = {
   umpire: { cx: STAGE.zoneX, cy: STAGE.zoneY, w: STAGE.zoneW, h: STAGE.zoneH, mirror: 1 },
-  broadcast: { cx: 210, cy: 200, w: 94, h: 104, mirror: -1 },
+  broadcast: { cx: 210, cy: 168, w: 100, h: 112, mirror: -1 },
 }
 let view: CameraView = 'umpire'
 let camera = VIEWS.umpire
@@ -62,8 +62,8 @@ function roundRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: numbe
  * Broadcast camera: the pitcher is seen full-body from behind on one side of the mound,
  * leaving an open lane to the plate, like an off-center TV camera.
  */
-const PITCHER_SCALE = 1.36, PITCHER_FOOT_Y = 365, PITCHER_LOCAL_FOOT = 446
-const pitcherX = (righty: boolean) => righty ? 132 : 288
+const PITCHER_SCALE = 1.24, PITCHER_FOOT_Y = 390, PITCHER_LOCAL_FOOT = 446
+const pitcherX = (righty: boolean) => righty ? 70 : 320
 /** Release hand in the pitcher's own (unscaled) drawing space. release: zone units, catcher view (righty = negative x). */
 function handLocal(release: { x: number; y: number }) {
   return { x: pitcherX(release.x <= 0) - release.x * 52 - Math.sign(release.x) * 8, y: 336 + release.y * 44 }
@@ -232,18 +232,18 @@ function drawBroadcastScenery(ctx: CanvasRenderingContext2D, now: number) {
     g.fillStyle = grass; g.fillRect(0, 102, w, h - 102)
     for (let i = 0; i < 12; i++) { const y = 102 + Math.pow(i / 12, 1.4) * (h - 102), y2 = 102 + Math.pow((i + 1) / 12, 1.4) * (h - 102); g.fillStyle = i % 2 ? '#ffffff07' : '#00000012'; g.fillRect(0, y, w, y2 - y) }
     // Dirt around home plate
-    g.fillStyle = '#7b5d3f'; g.beginPath(); g.ellipse(210, 250, 132, 36, 0, 0, Math.PI * 2); g.fill()
-    g.fillStyle = '#8e6d4a'; g.beginPath(); g.ellipse(210, 252, 92, 22, 0, 0, Math.PI * 2); g.fill()
+    g.fillStyle = '#7b5d3f'; g.beginPath(); g.ellipse(210, 218, 132, 36, 0, 0, Math.PI * 2); g.fill()
+    g.fillStyle = '#8e6d4a'; g.beginPath(); g.ellipse(210, 220, 92, 22, 0, 0, Math.PI * 2); g.fill()
     // Foul lines run from the plate out toward the camera
     g.strokeStyle = '#f3f1e680'; g.lineWidth = 2
-    g.beginPath(); g.moveTo(185, 258); g.lineTo(-45, 372); g.moveTo(235, 258); g.lineTo(465, 372); g.stroke()
+    g.beginPath(); g.moveTo(185, 226); g.lineTo(-45, 372); g.moveTo(235, 226); g.lineTo(465, 372); g.stroke()
     // Batter's boxes and the plate (the point faces away from this camera)
     g.strokeStyle = '#f3f1e6aa'; g.lineWidth = 1.6
-    g.strokeRect(131, 240, 40, 22); g.strokeRect(249, 240, 40, 22)
-    g.fillStyle = '#f2f4ee'; g.beginPath(); g.moveTo(181, 258); g.lineTo(239, 258); g.lineTo(239, 254); g.lineTo(210, 248); g.lineTo(181, 254); g.closePath(); g.fill()
+    g.strokeRect(131, 208, 40, 22); g.strokeRect(249, 208, 40, 22)
+    g.fillStyle = '#f2f4ee'; g.beginPath(); g.moveTo(181, 226); g.lineTo(239, 226); g.lineTo(239, 222); g.lineTo(210, 216); g.lineTo(181, 222); g.closePath(); g.fill()
     // Mound in the foreground
-    g.fillStyle = '#8a6a48'; g.beginPath(); g.ellipse(195, 373, 210, 60, 0, 0, Math.PI * 2); g.fill()
-    g.fillStyle = '#a3825b'; g.beginPath(); g.ellipse(190, 372, 130, 33, 0, 0, Math.PI * 2); g.fill()
+    g.fillStyle = '#8a6a48'; g.beginPath(); g.ellipse(195, 394, 210, 60, 0, 0, Math.PI * 2); g.fill()
+    g.fillStyle = '#a3825b'; g.beginPath(); g.ellipse(190, 393, 130, 33, 0, 0, Math.PI * 2); g.fill()
     broadcastCache = c
   }
   ctx.drawImage(broadcastCache, 0, 0, w, h)
@@ -258,7 +258,7 @@ function drawBroadcastScenery(ctx: CanvasRenderingContext2D, now: number) {
 function drawCatcher(ctx: CanvasRenderingContext2D, target: { x: number; y: number }) {
   ctx.save()
   const shift = camera.cx - 195
-  ctx.translate(shift, 0)
+  ctx.translate(shift, -32)
   ctx.lineCap = 'round'
   // umpire (behind the catcher)
   ctx.fillStyle = '#1b2436'; ctx.beginPath(); ctx.ellipse(195, 200, 21, 27, 0, 0, Math.PI * 2); ctx.fill()
@@ -273,7 +273,7 @@ function drawCatcher(ctx: CanvasRenderingContext2D, target: { x: number; y: numb
   ctx.strokeStyle = '#9aa6bb'; ctx.lineWidth = 1
   for (const y of [196, 200, 204]) { ctx.beginPath(); ctx.moveTo(189, y); ctx.lineTo(201, y); ctx.stroke() }
   // mitt arm (his glove hand is on screen-right: he faces the camera)
-  const mitt = { x: clamp(ZX(target.x) - shift, 142, 248), y: clamp(ZY(target.y), 148, 252) }
+  const mitt = { x: clamp(ZX(target.x) - shift, 142, 248), y: clamp(ZY(target.y) + 32, 148, 252) }
   ctx.strokeStyle = '#2e3d5a'; ctx.lineWidth = 6
   ctx.beginPath(); ctx.moveTo(207, 214); ctx.lineTo(mitt.x, mitt.y); ctx.stroke()
   ctx.fillStyle = '#7a4f2a'; ctx.beginPath(); ctx.arc(mitt.x, mitt.y, 8, 0, Math.PI * 2); ctx.fill()
@@ -368,7 +368,7 @@ function drawPitcher(ctx: CanvasRenderingContext2D, profile: PitcherProfile, fli
 
 function drawBatter(ctx: CanvasRenderingContext2D, side: Hand, anim: BatterAnim, color: string, now: number) {
   // Umpire view: righties stand screen-left. Broadcast: mirrored, farther away, drawn at the plate's depth.
-  const g = view === 'broadcast' ? { x: camera.cx + (side === 'R' ? 67 : -67), y: 262, k: .8 } : { x: side === 'R' ? 100 : 290, y: 372, k: 1 }
+  const g = view === 'broadcast' ? { x: camera.cx + (side === 'R' ? 74 : -74), y: 230, k: .8 } : { x: side === 'R' ? 100 : 290, y: 372, k: 1 }
   const dir = g.x < camera.cx ? 1 : -1 // direction toward the plate
   const ox = 0, oy = 0
   const since = now - anim.at
