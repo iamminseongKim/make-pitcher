@@ -9,6 +9,7 @@ import {
 } from '../src/game'
 import { newSeason, recordGame, seasonRates, TIERS, aggregate, formatIP, serviceTime, normalizeSeason, promotionStatus, callUpSchedule, seasonDone, PROMOTION_ERA, loadUnlockedTier, saveUnlockedTier, UNLOCK_KEY } from '../src/season'
 import { chartGeometry } from '../src/PitchChart'
+import { canvasToZone } from '../src/render'
 import { ageEffects, retirementStatus, hallOfFame, buildRetired, legacyBonus, loadLegacy, saveLegacy, LEGACY_KEY, START_AGE } from '../src/retirement'
 import { seasonAwards, gameFeat, trophyCase } from '../src/season'
 ;(globalThis as any).performance ??= { now: () => Date.now() }
@@ -48,6 +49,17 @@ p.hand = 'R'; p.armSlot = 'THREE_QUARTER'
   assert(curve.p.y - curve.linearY < four.p.y - four.linearY - .25, 'curve has a clear vertical drop')
   assert(Math.abs(path('SLIDER').p.x - path('SLIDER').linearX) > Math.abs(cutter.p.x - cutter.linearX), 'slider sweeps farther than cutter')
   assert(Math.abs(path('SLIDER', right, 99).p.x - path('SLIDER', right, 99).linearX) > Math.abs(path('SLIDER', right, 1).p.x - path('SLIDER', right, 1).linearX), 'movement stat strengthens the same shape')
+  for (const level of [1, 50, 99]) {
+    const rh = path('SINKER', { ...right, armSlot: 'THREE_QUARTER' }, level).flight
+    const lh = path('SINKER', { ...left, armSlot: 'THREE_QUARTER' }, level).flight
+    assert(pointOnFlight(rh, .8).x > pointOnFlight(rh, .95).x && pointOnFlight(rh, .95).x > pointOnFlight(rh, 1).x, 'righty sinker finishes arm-side')
+    assert(pointOnFlight(lh, .8).x < pointOnFlight(lh, .95).x && pointOnFlight(lh, .95).x < pointOnFlight(lh, 1).x, 'lefty sinker mirrors the finish')
+  }
+  for (const batter of ['R', 'L'] as const) for (const pitcher of ['R', 'L'] as const) {
+    const cx = 210 + (batter === 'R' ? -6 : 6) + (pitcher === 'R' ? 3 : -3)
+    const aim = canvasToZone('broadcast', cx, 200, batter, pitcher)
+    assert(Math.abs(aim.x) < 1e-10 && aim.y === 0, 'aim follows both hands')
+  }
 }
 
 /* ── Release meter: strict, continuous dispersion and critical miss ── */
@@ -206,6 +218,16 @@ const hitsOver = (n: number, flight: () => PitchFlight, ctx: Partial<AtBatContex
   seeded(seed); let hits = 0, swings = 0
   for (let i = 0; i < n; i++) { const r = resolvePitch(flight(), { batter: aiBatter, pitcherHand: 'R', balls: 1, strikes: 1, inning: 1, tier: 2, previous: null, seenTypes: [], seenSpeeds: [], fastest: f.speed, ...ctx }); if (HITS.includes(r.outcome)) hits++; if (r.swing) swings++ }
   Math.random = original; return { hits, swings }
+}
+{
+  const stat = { unlocked: true, velocityLevel: 35, controlLevel: 35, breakLevel: 35, mastery: 0 }
+  const edge = createPreviewFlight(PITCHES[0], stat, p, { x: 1.25, y: 0 })
+  const wild = createPreviewFlight(PITCHES[0], stat, p, { x: 1.9, y: 0 })
+  const early = hitsOver(6000, () => edge, { balls: 0, strikes: 0 }).swings
+  const protect = hitsOver(6000, () => edge, { balls: 1, strikes: 2 }).swings
+  const far = hitsOver(6000, () => wild, { balls: 1, strikes: 2 }).swings
+  assert(protect > early * 1.4 && protect > 1400, 'two-strike hitters offer at reachable balls more often')
+  assert(far < protect * .65, 'obvious waste pitches still get taken')
 }
 // Hitter-count fastballs in a repeated location improve contact (in-PA memory).
 assert(hitsOver(6000, () => f, { balls: 3, strikes: 1, history: Array(4).fill(g.pitchLog[0]) }).hits > hitsOver(6000, () => f, { balls: 3, strikes: 1, history: [] }).hits)

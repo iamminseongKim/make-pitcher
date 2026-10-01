@@ -8,20 +8,20 @@ export const STAGE = { width: 390, height: 432, zoneX: 195, zoneY: 232, zoneW: 1
 export type CameraView = 'umpire' | 'broadcast'
 const VIEWS: Record<CameraView, { cx: number; cy: number; w: number; h: number; mirror: number }> = {
   umpire: { cx: STAGE.zoneX, cy: STAGE.zoneY, w: STAGE.zoneW, h: STAGE.zoneH, mirror: 1 },
-  broadcast: { cx: 195, cy: 200, w: 94, h: 104, mirror: -1 },
+  broadcast: { cx: 210, cy: 200, w: 94, h: 104, mirror: -1 },
 }
 let view: CameraView = 'umpire'
 let camera = VIEWS.umpire
 /** Favor the open side of the plate for each batter, while keeping the mound fixed in the foreground. */
-function cameraFor(cam: CameraView, side: Hand) {
+function cameraFor(cam: CameraView, side: Hand, pitcherHand: Hand) {
   const base = VIEWS[cam]
-  return cam === 'broadcast' ? { ...base, cx: base.cx + (side === 'R' ? -9 : 9) } : base
+  return cam === 'broadcast' ? { ...base, cx: base.cx + (side === 'R' ? -6 : 6) + (pitcherHand === 'R' ? 3 : -3) } : base
 }
 const ZX = (x: number) => camera.cx + camera.mirror * x * camera.w / 2
 const ZY = (y: number) => camera.cy + y * camera.h / 2
 /** Canvas point → zone units for a camera (inverse of ZX/ZY; used for aiming taps). */
-export function canvasToZone(cam: CameraView, x: number, y: number, side: Hand) {
-  const v = cameraFor(cam, side)
+export function canvasToZone(cam: CameraView, x: number, y: number, side: Hand, pitcherHand: Hand) {
+  const v = cameraFor(cam, side, pitcherHand)
   return { x: (x - v.cx) / (v.w / 2) * v.mirror, y: (y - v.cy) / (v.h / 2) }
 }
 
@@ -59,11 +59,11 @@ function roundRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: numbe
 }
 
 /*
- * Broadcast camera: the pitcher is close to the lens (drawn big, from behind, feet off the bottom edge)
- * and offset to his glove side so the plate stays visible; the hitter is ~18 m away and small.
+ * Broadcast camera: the pitcher is seen full-body from behind on one side of the mound,
+ * leaving an open lane to the plate, like an off-center TV camera.
  */
-const PITCHER_SCALE = 1.45, PITCHER_BASE = 440
-const pitcherX = (righty: boolean) => righty ? 122 : 268
+const PITCHER_SCALE = 1.36, PITCHER_FOOT_Y = 365, PITCHER_LOCAL_FOOT = 446
+const pitcherX = (righty: boolean) => righty ? 132 : 288
 /** Release hand in the pitcher's own (unscaled) drawing space. release: zone units, catcher view (righty = negative x). */
 function handLocal(release: { x: number; y: number }) {
   return { x: pitcherX(release.x <= 0) - release.x * 52 - Math.sign(release.x) * 8, y: 336 + release.y * 44 }
@@ -71,7 +71,7 @@ function handLocal(release: { x: number; y: number }) {
 /** Release hand on the canvas. */
 function broadcastHand(release: { x: number; y: number }) {
   const h = handLocal(release), ax = pitcherX(release.x <= 0)
-  return { x: ax + (h.x - ax) * PITCHER_SCALE, y: PITCHER_BASE + (h.y - PITCHER_BASE) * PITCHER_SCALE }
+  return { x: ax + (h.x - ax) * PITCHER_SCALE, y: PITCHER_FOOT_Y + (h.y - PITCHER_LOCAL_FOOT) * PITCHER_SCALE }
 }
 const CAM = 8, RUN = 16.6
 /** 0 at the hand → 1 at the plate. The ball recedes from the camera, so it covers most of the screen early. */
@@ -232,18 +232,18 @@ function drawBroadcastScenery(ctx: CanvasRenderingContext2D, now: number) {
     g.fillStyle = grass; g.fillRect(0, 102, w, h - 102)
     for (let i = 0; i < 12; i++) { const y = 102 + Math.pow(i / 12, 1.4) * (h - 102), y2 = 102 + Math.pow((i + 1) / 12, 1.4) * (h - 102); g.fillStyle = i % 2 ? '#ffffff07' : '#00000012'; g.fillRect(0, y, w, y2 - y) }
     // Dirt around home plate
-    g.fillStyle = '#7b5d3f'; g.beginPath(); g.ellipse(195, 250, 132, 36, 0, 0, Math.PI * 2); g.fill()
-    g.fillStyle = '#8e6d4a'; g.beginPath(); g.ellipse(195, 252, 92, 22, 0, 0, Math.PI * 2); g.fill()
+    g.fillStyle = '#7b5d3f'; g.beginPath(); g.ellipse(210, 250, 132, 36, 0, 0, Math.PI * 2); g.fill()
+    g.fillStyle = '#8e6d4a'; g.beginPath(); g.ellipse(210, 252, 92, 22, 0, 0, Math.PI * 2); g.fill()
     // Foul lines run from the plate out toward the camera
     g.strokeStyle = '#f3f1e680'; g.lineWidth = 2
-    g.beginPath(); g.moveTo(170, 258); g.lineTo(-60, 372); g.moveTo(220, 258); g.lineTo(450, 372); g.stroke()
+    g.beginPath(); g.moveTo(185, 258); g.lineTo(-45, 372); g.moveTo(235, 258); g.lineTo(465, 372); g.stroke()
     // Batter's boxes and the plate (the point faces away from this camera)
     g.strokeStyle = '#f3f1e6aa'; g.lineWidth = 1.6
-    g.strokeRect(116, 240, 40, 22); g.strokeRect(234, 240, 40, 22)
-    g.fillStyle = '#f2f4ee'; g.beginPath(); g.moveTo(166, 258); g.lineTo(224, 258); g.lineTo(224, 254); g.lineTo(195, 248); g.lineTo(166, 254); g.closePath(); g.fill()
+    g.strokeRect(131, 240, 40, 22); g.strokeRect(249, 240, 40, 22)
+    g.fillStyle = '#f2f4ee'; g.beginPath(); g.moveTo(181, 258); g.lineTo(239, 258); g.lineTo(239, 254); g.lineTo(210, 248); g.lineTo(181, 254); g.closePath(); g.fill()
     // Mound in the foreground
-    g.fillStyle = '#8a6a48'; g.beginPath(); g.ellipse(195, 452, 210, 72, 0, 0, Math.PI * 2); g.fill()
-    g.fillStyle = '#a3825b'; g.beginPath(); g.ellipse(190, 446, 130, 38, 0, 0, Math.PI * 2); g.fill()
+    g.fillStyle = '#8a6a48'; g.beginPath(); g.ellipse(195, 373, 210, 60, 0, 0, Math.PI * 2); g.fill()
+    g.fillStyle = '#a3825b'; g.beginPath(); g.ellipse(190, 372, 130, 33, 0, 0, Math.PI * 2); g.fill()
     broadcastCache = c
   }
   ctx.drawImage(broadcastCache, 0, 0, w, h)
@@ -293,7 +293,7 @@ function drawPitcherBack(ctx: CanvasRenderingContext2D, profile: PitcherProfile,
   const X = pitcherX(arm === 1)
   ctx.save()
   // Near the camera: scale the figure up around its feet.
-  ctx.translate(X, PITCHER_BASE); ctx.scale(PITCHER_SCALE, PITCHER_SCALE); ctx.translate(-X, -PITCHER_BASE)
+  ctx.translate(X, PITCHER_FOOT_Y); ctx.scale(PITCHER_SCALE, PITCHER_SCALE); ctx.translate(-X, -PITCHER_LOCAL_FOOT)
   ctx.lineCap = 'round'; ctx.lineJoin = 'round'
   // rubber
   ctx.fillStyle = '#f1efe4'; ctx.fillRect(X - 22, 436, 44, 4)
@@ -586,7 +586,7 @@ function drawBatted(ctx: CanvasRenderingContext2D, b: BattedBall, now: number) {
   const sx = ZX(b.from.x), sy = ZY(b.from.y)
   if (view === 'broadcast') {
     // Fair balls fly out toward the center-field camera (grow), pops and fouls go up and away (shrink).
-    const ex = 195 - b.spray * (b.type === 'FOUL' ? 300 : 210)
+    const ex = camera.cx - b.spray * (b.type === 'FOUL' ? 300 : 210)
     const ey = { HR: 580, FLY: 470, LINE: 430, GROUND: 405, POP: 30, FOUL: 120 }[b.type]
     const arc = { HR: 60, FLY: 90, LINE: 12, GROUND: 0, POP: 120, FOUL: 30 }[b.type]
     const grow = { HR: 16, FLY: 11, LINE: 8, GROUND: 5, POP: 0, FOUL: 0 }[b.type]
@@ -613,7 +613,7 @@ function drawResult(ctx: CanvasRenderingContext2D, result: RenderScene['result']
   const big = result.tone === 'k' || result.tone === 'hr'
   ctx.save()
   ctx.globalAlpha = alpha
-  ctx.translate(195, view === 'broadcast' ? 96 : 138); ctx.scale(pop, pop)
+  ctx.translate(camera.cx, view === 'broadcast' ? 96 : 138); ctx.scale(pop, pop)
   ctx.textAlign = 'center'
   ctx.font = `italic 900 ${big ? 44 : 34}px 'Barlow Condensed', system-ui`
   const color = { k: '#ffb400', hr: '#ff4d5e', hit: '#ffcf70', out: '#22d3ee', ball: '#f5f8fc', strike: '#f5f8fc', foul: '#f5f8fc', miss: '#ff4d5e' }[result.tone] ?? '#fff'
@@ -626,7 +626,7 @@ function drawResult(ctx: CanvasRenderingContext2D, result: RenderScene['result']
 export function renderScene(ctx: CanvasRenderingContext2D, scene: RenderScene) {
   const { flight, flightProgress: t, now } = scene
   view = scene.view ?? 'umpire'
-  camera = cameraFor(view, scene.batterSide)
+  camera = cameraFor(view, scene.batterSide, scene.profile.hand)
   ctx.clearRect(0, 0, STAGE.width, STAGE.height)
   ctx.save()
   const impactAge = (now - scene.result.at) / 1000

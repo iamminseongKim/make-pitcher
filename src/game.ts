@@ -59,7 +59,7 @@ export interface PitchDefinition {
 // moveX: + is glove side, - is arm side (sign is flipped for lefties). moveY: - is up, + is down.
 export const PITCHES: PitchDefinition[] = [
   { id: 'FOUR_SEAM', name: '포심 패스트볼', short: '포심', family: 'FASTBALL', minSpeed: 130, maxSpeed: 170, moveX: -8, moveY: -45, late: .55, color: '#e63b58', unlockCost: 125, description: '높게 던지면 떠오르듯 배트 위로 지나갑니다' },
-  { id: 'SINKER', name: '싱커', short: '싱커', family: 'FASTBALL', minSpeed: 128, maxSpeed: 166, moveX: -30, moveY: 32, late: .72, color: '#ff9d16', unlockCost: 115, description: '같은 손 타자 몸쪽으로 파고들어 땅볼 유도' },
+  { id: 'SINKER', name: '싱커', short: '싱커', family: 'FASTBALL', minSpeed: 128, maxSpeed: 166, moveX: -40, moveY: 32, late: .72, color: '#ff9d16', unlockCost: 115, description: '같은 손 타자 몸쪽으로 파고들어 땅볼 유도' },
   { id: 'CUTTER', name: '커터', short: '커터', family: 'FASTBALL', minSpeed: 124, maxSpeed: 163, moveX: 30, moveY: 8, late: .82, color: '#b0a7ff', unlockCost: 135, description: '반대 손 타자 몸쪽으로 꺾여 배트 손잡이에 맞습니다' },
   { id: 'SPLITTER', name: '스플리터', short: '스플리터', family: 'OFFSPEED', minSpeed: 118, maxSpeed: 154, moveX: -4, moveY: 52, late: .85, color: '#ffb974', unlockCost: 145, description: '직구처럼 오다 바닥으로 사라지는 결정구' },
   { id: 'CHANGEUP', name: '체인지업', short: '체인지업', family: 'OFFSPEED', minSpeed: 112, maxSpeed: 145, moveX: -31, moveY: 28, late: .62, color: '#31bf64', unlockCost: 125, description: '반대 손 타자 바깥으로 흘러나가며 타이밍 강탈' },
@@ -563,12 +563,13 @@ export function resolvePitch(f: PitchFlight, c: AtBatContext): PitchResult {
   // 2) Swing decision.
   const pz = Math.max(Math.abs(perceived.x), Math.abs(perceived.y))
   const looksStrike = pz <= 1.04
-  let zoneSwing = .7, chase = .3 * Math.exp(-Math.max(0, pz - 1.04) * 2.4)
+  // Arcade hitters offer at reachable balls near the edge; clearly wild pitches still lose them quickly.
+  let zoneSwing = .72, chase = .38 * Math.exp(-Math.max(0, pz - 1.04) * 1.9)
   const { balls, strikes } = c
   if (balls === 0 && strikes === 0) { zoneSwing *= .72; chase *= .72 }
   if (balls === 3 && strikes === 0) { zoneSwing *= .3; chase *= .15 }
   else if ((balls === 2 && strikes === 0) || (balls === 3 && strikes === 1)) { zoneSwing *= 1.1; chase *= .6 }
-  if (strikes === 2) { zoneSwing = .88; chase *= 1.35 }
+  if (strikes === 2) { zoneSwing = .85; chase *= 1.35 }
   const awayMatchup = same && toInside(L.x) < -.4 && (f.pitch.family === 'BREAKING' || f.pitch.family === 'FASTBALL')
   const backdoor = !same && f.pitch.family === 'BREAKING' && toInside(L.x) < -.65 && inZone(L, .15)
   if (awayMatchup || (!same && f.pitch.id === 'CHANGEUP') || backdoor) chase *= 1.15
@@ -584,7 +585,9 @@ export function resolvePitch(f: PitchFlight, c: AtBatContext): PitchResult {
   // A hanging meatball: the hitter pounces.
   if (meatball && !(balls === 3 && strikes === 0)) zoneSwing = Math.max(zoneSwing, .93)
   if (f.trait === 'signature' && f.pitch.family === 'BREAKING') chase *= 1.12
-  const swingChance = clamp(looksStrike ? zoneSwing : chase, 0, .97)
+  // Blend across the plate edge so a pitch just off the corner does not cause an abrupt swing-rate cliff.
+  const edgeBlend = clamp((pz - .9) / .36, 0, 1)
+  const swingChance = clamp(lerp(zoneSwing, chase, edgeBlend), 0, .97)
   const swing = Math.random() < swingChance
 
   if (meatball) tags.push('실투!')

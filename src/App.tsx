@@ -254,8 +254,8 @@ function App() {
   finishRef.current = finishPitch
 
   function playOutcome(call: Call, o: PitchResult['outcome'], f: PitchFlight) {
-    if (o === 'HOME_RUN') { sfx('crack', soundOn); sfx('cheer', soundOn); setShake(s => s + 1); buzz([80, 40, 80]) }
-    else if (o === 'SINGLE' || o === 'DOUBLE') { sfx('crack', soundOn); sfx('cheer', soundOn); buzz(45) }
+    if (o === 'HOME_RUN') { sfx('crack', soundOn); setShake(s => s + 1); buzz([80, 40, 80]) }
+    else if (o === 'SINGLE' || o === 'DOUBLE') { sfx('crack', soundOn); buzz(45) }
     else if (o === 'FOUL' || o.endsWith('_OUT')) { sfx('bat', soundOn); if (o !== 'FOUL') sfx('mitt', soundOn) }
     else if (o === 'SWINGING_STRIKE') { sfx('whiff', soundOn); sfx(f.grade === 'PERFECT' ? 'pop' : 'mitt', soundOn) }
     else sfx(f.grade === 'PERFECT' && o === 'CALLED_STRIKE' ? 'pop' : 'mitt', soundOn)
@@ -339,7 +339,7 @@ function App() {
     const rect = event.currentTarget.getBoundingClientRect()
     const x = (event.clientX - rect.left) / rect.width * STAGE.width
     const y = (event.clientY - rect.top) / rect.height * STAGE.height
-    const z = canvasToZone(settings.view === 'broadcast' ? 'broadcast' : 'umpire', x, y, side)
+    const z = canvasToZone(settings.view === 'broadcast' ? 'broadcast' : 'umpire', x, y, side, profile.hand)
     setTarget({ x: clamp(z.x, -1.7, 1.7), y: clamp(z.y, -1.7, 1.7) })
     setAimedOnce(true)
   }
